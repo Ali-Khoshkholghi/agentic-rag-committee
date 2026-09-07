@@ -3,3 +3,4 @@ uvicorn[standard]>=0.30
 python-dotenv>=1.0
 langgraph>=0.6
 langchain-google-genai>=2.0
+google-adk>=1.0

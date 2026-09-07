@@ -27,7 +27,7 @@ downstream agent works in isolation.
 | Agent | Port | Skill (Agent Card) | Streams? | Output |
 |---|---|---|---|---|
 | `lit_search` | 9001 | `find-sources` | yes — one source at a time via `TaskArtifactUpdateEvent` | list of `{title, url, snippet}` as DataParts |
-| `synthesis` | 9002 | `draft-answer` | yes — text chunks via `TaskArtifactUpdateEvent` with `append: true` | drafted paragraph(s), TextPart |
+| `synthesis` | 9002 | `draft-answer` | yes — text chunks via `TaskArtifactUpdateEvent` with `append: true` | drafted paragraph(s), TextPart; internally a naive templater, a raw Gemini call, or a Google ADK agent (Step 8), same contract either way |
 | `critic` | 9003 | `verify-claims` | no — single final DataPart | list of `{claim, supported: bool, note}`; internally naive keyword-overlap or LangGraph+Gemini (Step 7), same contract either way |
 | `chair` | 9000 | `research-question` (the only skill a human calls) | yes — relays committee progress upward | final answer + critique summary |
 
@@ -168,6 +168,54 @@ a real justification alongside genuinely supported claims flagged `true`;
 and the full `chair` pipeline end-to-end with `SYNTHESIS_PROVIDER=gemini`
 + `CRITIC_MODE=langgraph`, confirming `critic`'s verdicts carry real
 per-claim reasoning rather than overlap ratios.
+
+### Step 8 — rebuild `synthesis`'s internals on a second agentic framework
+Only after step 7 works end-to-end: rebuild `synthesis`'s LLM-calling logic
+on the **Google ADK** (`google-adk`), backed by the same `GEMINI_API_KEY`,
+while its A2A server layer, Agent Card, skill (`draft-answer`), port
+(9002), streamed TextPart chunk semantics (`append`/`last_chunk`), and its
+existing `input-required` pause/resume for thin/contradictory sources
+don't change at all. Together with Step 7 (`critic` on LangGraph), this
+makes the committee's two genuinely agentic nodes — `synthesis` and
+`critic` — each built on a *different* agent framework, both Gemini-backed,
+interoperating over their respective unchanged A2A contracts; `lit_search`
+and `chair` remain simpler non-agentic A2A services by design. This is the
+project's actual framework-level interoperability proof-point.
+
+`agents/synthesis/adk_provider.py` wraps a single ADK `Agent` — no tools,
+no sub-agents, no multi-step tool-use loop, just one well-structured
+agentic call — configured with the same grounding rules as Step 6's raw
+Gemini prompt (answer only from the given sources, paraphrase in its own
+words, no verbatim quoting, no outside knowledge, plain prose), split into
+an ADK `instruction` (the fixed rules) and a per-request user message
+(topic + sources + optional guidance). Uses ADK's own streaming `Runner`
+(`StreamingMode.SSE`) so the executor keeps emitting incremental
+`TaskArtifactUpdateEvent`s exactly as before, not one blocking call. A
+live ADK/Gemini failure (API error, timeout, empty response) raises
+`SynthesisProviderError`, the same exception the raw Gemini provider
+raises, so the executor's existing failure handling (`TaskState.failed`)
+needs no changes either.
+
+**Status:** Implemented by extending the existing `SynthesisProvider`
+adapter (`agents/synthesis/llm_provider.py`) with `ADKSynthesisProvider`,
+selected by `SYNTHESIS_PROVIDER=fake|gemini|adk` (`gemini`, Step 6's raw
+call, kept for comparison/fallback; `fake` remains the zero-key default).
+Verified live in this session: `fake` and `gemini` modes unchanged;
+`adk` mode standalone against `synthesis` (port 9002) produced a genuinely
+paraphrased draft (not verbatim source text) with the correct streaming
+sequence (`append=false` first chunk, `append=true`/`last_chunk=true`
+final chunk); and the full `chair` pipeline end-to-end with
+`SYNTHESIS_PROVIDER=adk` + `CRITIC_MODE=langgraph` completed successfully,
+`critic` producing a sensible mix of `supported`/`unsupported` verdicts
+with real reasoning against ADK's drafted output. The full-pipeline run
+hit the Gemini free-tier's per-model daily request quota (20/day) on the
+default `gemini-3.6-flash` partway through this session's testing (a
+`RESOURCE_EXHAUSTED` 429, itself a genuine live exercise of the
+failure-handling path — it correctly surfaced as `TaskState.failed`); the
+final full-pipeline verification run was completed live by pointing
+`GEMINI_MODEL` at a different model (`gemini-flash-lite-latest`, same API,
+separate quota bucket) for that one run only — no code or default model
+changed, this was purely a quota workaround for verification.
 
 ## Definition of done for each step
 

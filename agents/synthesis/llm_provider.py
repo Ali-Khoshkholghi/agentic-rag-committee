@@ -236,9 +236,9 @@ class GeminiSynthesisProvider(SynthesisProvider):
 def build_provider() -> SynthesisProvider:
     """Selects the synthesis provider from SYNTHESIS_PROVIDER (default: fake).
 
-    Fails loudly (SynthesisProviderConfigError) if 'gemini' is selected
-    but GEMINI_API_KEY isn't set, so misconfiguration is caught at
-    startup rather than on the first draft request.
+    Fails loudly (SynthesisProviderConfigError) if 'gemini'/'adk' is
+    selected but GEMINI_API_KEY isn't set, so misconfiguration is caught
+    at startup rather than on the first draft request.
     """
     provider_name = os.environ.get("SYNTHESIS_PROVIDER", "fake").strip().lower()
 
@@ -257,6 +257,23 @@ def build_provider() -> SynthesisProvider:
         api_url = os.environ.get("GEMINI_API_URL", GeminiSynthesisProvider.DEFAULT_API_URL)
         return GeminiSynthesisProvider(api_key=api_key, model=model, api_url=api_url)
 
+    if provider_name == "adk":
+        api_key = os.environ.get("GEMINI_API_KEY")
+        if not api_key:
+            raise SynthesisProviderConfigError(
+                "SYNTHESIS_PROVIDER=adk but GEMINI_API_KEY is not set. "
+                "Set GEMINI_API_KEY, or set SYNTHESIS_PROVIDER=fake (or "
+                "leave it unset) to use the built-in templated draft instead."
+            )
+        # Lazy import: keeps google-adk out of the import graph for
+        # anyone running fake/gemini mode, and avoids any import-order
+        # coupling with this module (adk_provider imports SynthesisProvider
+        # and SynthesisProviderError from here).
+        from agents.synthesis.adk_provider import ADKSynthesisProvider
+
+        model = os.environ.get("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
+        return ADKSynthesisProvider(model=model)
+
     raise SynthesisProviderConfigError(
-        f"Unknown SYNTHESIS_PROVIDER={provider_name!r} (expected 'fake' or 'gemini')"
+        f"Unknown SYNTHESIS_PROVIDER={provider_name!r} (expected 'fake', 'gemini', or 'adk')"
     )
