@@ -89,18 +89,50 @@ disagreement.
 ### `critic` (9003)
 
 Single-shot, non-streaming: one `working` status, one final `DataPart`
-artifact with a per-claim verdict list, then `completed`. Claim
-verification is a deliberately naive keyword-overlap heuristic against a
-named `SUPPORT_THRESHOLD` constant — explicitly flagged in
-`agents/critic/matching.py` as a placeholder for real fact-checking, not
-a finished feature. It's intentionally left as-is even after `synthesis`
-started using a real LLM (see below): the point is to see a simple,
-fixed checker meaningfully catch drift in a real model's paraphrased
-output, rather than upgrading both sides together and losing that
-signal. In practice it does — a live run against Gemini-drafted output
-came back with a genuine mix of verdicts (10 `supported: true`, 1
-`supported: false` at ratio 0.33, below threshold, for a claim that was
-accurate but phrased too generally to keyword-match any single source).
+artifact with a per-claim verdict list, then `completed`/`failed`. Its
+A2A contract has never changed since Step 3 — same Agent Card, same
+`verify-claims` skill, same port, same `{draft, sources}` in →
+`{verdicts: [{claim, supported, note}]}` out shape — but its *internal*
+verification logic is swappable via `CRITIC_MODE`
+(`agents/critic/verifier.py`):
+
+- `naive` (`agents/critic/matching.py`) — the original keyword-overlap
+  heuristic against a named `SUPPORT_THRESHOLD` constant. No LLM call, no
+  key required.
+- `langgraph` (`agents/critic/langgraph_verifier.py`) — a small
+  **LangGraph** graph, backed by the Gemini API (same `GEMINI_API_KEY` as
+  `synthesis`). For each claim: a `retrieve_candidate_source` node picks
+  the most likely source via the same cheap keyword-overlap ranking as
+  the naive checker (no LLM call needed there), then a `judge_claim` node
+  makes one Gemini call asking strictly whether that specific source
+  supports the claim, with a one-sentence justification — a response
+  that can't be parsed into a clear yes/no falls back to
+  `supported: false` with an "inconclusive" note rather than crashing,
+  and a network/API failure (timeout, rate limit, empty response) fails
+  the whole task, the same pattern as `synthesis`'s Gemini error
+  handling.
+
+Defaults to `langgraph` if `GEMINI_API_KEY` is set and `CRITIC_MODE` is
+left unset, otherwise `naive` — same zero-key-required principle as
+`LIT_SEARCH_PROVIDER`/`SYNTHESIS_PROVIDER`. This is the repo's
+interoperability proof: `critic` is built on a completely different
+agent framework (LangGraph) than the rest of the committee (direct API
+calls / naive logic), and no other agent needed to change at all for
+that to work — they only ever talked to `critic` through its Agent Card
+and DataPart contract.
+
+Against the naive templater's near-verbatim output, the naive checker's
+overlap heuristic is close to trivial (an honestly-echoed sentence will
+essentially always clear `SUPPORT_THRESHOLD`). Against real Gemini
+output it does meaningful work purely as a side effect of the LLM
+paraphrasing in its own words — but that's `critic` catching *vocabulary
+drift*, not verifying the claim is actually true. The `langgraph`
+verifier is the real thing: it reads the actual source text and judges
+whether it substantively supports the claim, so it can (and does) flag a
+paraphrased-but-accurate claim as supported where the naive checker
+would miss it on vocabulary alone, and flag a fabricated claim as
+unsupported even when it shares no obviously-absent keywords with any
+source.
 
 ### `chair` (9000)
 
@@ -190,6 +222,8 @@ LIT_SEARCH_PROVIDER=tavily
 GEMINI_API_KEY=
 SYNTHESIS_PROVIDER=gemini
 # GEMINI_MODEL=gemini-3.6-flash
+
+CRITIC_MODE=langgraph
 ```
 
 - `LIT_SEARCH_PROVIDER` — `fake` (default if unset) or `tavily`. `fake`
@@ -204,9 +238,14 @@ SYNTHESIS_PROVIDER=gemini
   (defaults to `gemini-3.6-flash`) — override it if that model is ever
   retired; see the `synthesis` section above for the model's latency
   characteristics.
+- `CRITIC_MODE` — `naive` or `langgraph`. If left unset, defaults to
+  `langgraph` when `GEMINI_API_KEY` is set, otherwise `naive` — same
+  zero-key-required principle as the other two toggles above.
+  `langgraph` fails loudly at startup if `GEMINI_API_KEY` is missing,
+  same as `SYNTHESIS_PROVIDER=gemini`.
 - `.env` is loaded automatically (`python-dotenv`) by `lit_search`,
-  `synthesis`, and `chair`; you can also just export the vars in your
-  shell instead of using a `.env` file.
+  `synthesis`, `critic`, and `chair`; you can also just export the vars
+  in your shell instead of using a `.env` file.
 
 ### Start the agents
 
@@ -261,17 +300,20 @@ Stated plainly, since this is meant to be read, not buried:
   oversight; see `agents/synthesis/drafting.py`. With
   `SYNTHESIS_PROVIDER=gemini` it's a real LLM call instead — see the
   `synthesis` section above.
-- **`critic`'s naive keyword-overlap check has no real grounding
-  verification of its own.** It trusts that whatever `synthesis` sends it
-  is the actual draft, and scores each claim against the *best*-matching
-  source by shared vocabulary — nothing more sophisticated. Against the
-  fake templater's near-verbatim output, that overlap check is close to
-  trivial (an honestly-echoed sentence will essentially always clear
-  `SUPPORT_THRESHOLD`). Against real Gemini output it does meaningful
-  work purely as a side effect of the LLM paraphrasing in its own words:
-  a live run came back with a genuine mix (10 `supported: true`, 1
-  `supported: false`) — but that's `critic` catching *vocabulary drift*,
-  not verifying the claim is actually true. See `agents/critic/matching.py`.
+- **`critic`'s default mode depends on whether a Gemini key is present.**
+  With no `GEMINI_API_KEY` set (or `CRITIC_MODE=naive` explicitly), it
+  falls back to the original keyword-overlap heuristic, which has no real
+  grounding verification of its own — it trusts that whatever `synthesis`
+  sends it is the actual draft, and scores each claim against the
+  *best*-matching source by shared vocabulary, nothing more. Against the
+  fake templater's near-verbatim output that overlap check is close to
+  trivial; against real Gemini output it does meaningful work purely as a
+  side effect of the LLM paraphrasing in its own words, but that's
+  catching *vocabulary drift*, not verifying the claim is actually true.
+  See `agents/critic/matching.py`. With `CRITIC_MODE=langgraph` (the
+  default when a key is present), a Gemini call actually reads the
+  candidate source and judges substantive support — see the `critic`
+  section above.
 - **`SUPPORT_THRESHOLD` and `TOPIC_RELATEDNESS_THRESHOLD` are empirically
   tuned on a small sample**, not rigorously validated — reasonable
   starting points, not numbers to trust blindly.
@@ -285,5 +327,5 @@ Stated plainly, since this is meant to be read, not buried:
 
 `SPEC.md` is the original design doc this was built from, step by step
 (fake `lit_search` → debug client → `synthesis`/`critic` → `chair` →
-real search → real `synthesis` LLM). Worth reading if you want the full
-build rationale, not just the result.
+real search → real `synthesis` LLM → `critic` rebuilt on LangGraph).
+Worth reading if you want the full build rationale, not just the result.
