@@ -28,7 +28,7 @@ downstream agent works in isolation.
 |---|---|---|---|---|
 | `lit_search` | 9001 | `find-sources` | yes — one source at a time via `TaskArtifactUpdateEvent` | list of `{title, url, snippet}` as DataParts |
 | `synthesis` | 9002 | `draft-answer` | yes — text chunks via `TaskArtifactUpdateEvent` with `append: true` | drafted paragraph(s), TextPart |
-| `critic` | 9003 | `verify-claims` | no — single final DataPart | list of `{claim, supported: bool, note}` |
+| `critic` | 9003 | `verify-claims` | no — single final DataPart | list of `{claim, supported: bool, note}`; internally naive keyword-overlap or LangGraph+Gemini (Step 7), same contract either way |
 | `chair` | 9000 | `research-question` (the only skill a human calls) | yes — relays committee progress upward | final answer + critique summary |
 
 Each agent (including `chair`) must publish a valid A2A **Agent Card** at
@@ -118,6 +118,56 @@ adapter logic verified via stub success/error-mode tests; failure-handling
 path additionally verified against a genuine live network failure in this
 session. Outstanding: a real-key smoke test against the live Tavily API to
 confirm response-shape parsing, to be run outside this sandbox.
+
+### Step 6 — swap in a real LLM for `synthesis`
+Only after step 5 works end-to-end: replace `synthesis`'s naive templater
+with a real LLM call. Everything else should be unaffected, since the A2A
+contract doesn't change.
+
+**Status:** Implemented via a swappable `SynthesisProvider` adapter
+(`agents/synthesis/llm_provider.py`), with `FakeSynthesisProvider` (default)
+and `GeminiSynthesisProvider` (Google Gemini, `GEMINI_API_KEY`), selected by
+`SYNTHESIS_PROVIDER=fake|gemini`. Verified live against the Gemini API in
+this session.
+
+### Step 7 — rebuild `critic`'s internals on a second agent framework
+Only after step 6 works end-to-end: rebuild `critic`'s internal
+claim-verification logic on **LangGraph**, backed by the Gemini API (the
+same `GEMINI_API_KEY` already used by `synthesis`), while its A2A server
+layer, Agent Card, skill (`verify-claims`), port (9003), and DataPart
+shape (`{draft, sources}` in → `{verdicts: [{claim, supported, note}]}`
+out) don't change at all — this is the interoperability proof: no other
+agent (`chair`, `synthesis`, `lit_search`) needs to know or care that
+`critic` is now internally built on a different agent framework than the
+rest of the committee.
+
+The graph (`agents/critic/langgraph_verifier.py`) walks, per claim:
+1. `retrieve_candidate_source` — cheap keyword-overlap ranking (reused
+   from the naive checker, no LLM call) to narrow to the one most
+   plausible source for that claim.
+2. `judge_claim` — a single Gemini call asking strictly whether that
+   source genuinely supports the claim, with a one-sentence
+   justification. A response that can't be parsed into a clear yes/no
+   falls back to `supported: False` with an "inconclusive" note, not a
+   crash.
+3. `assemble` — produces the same `{claim, supported, note}` shape as
+   the naive checker, `note` now being the LLM's real justification.
+
+**Status:** Implemented via a swappable `ClaimVerifier`
+(`agents/critic/verifier.py`), with `NaiveVerifier` (the original
+keyword-overlap checker) and `LangGraphVerifier` (LangGraph + Gemini),
+selected by `CRITIC_MODE=naive|langgraph` — defaulting to `langgraph` if
+`GEMINI_API_KEY` is set and `CRITIC_MODE` is left unset, otherwise `naive`
+(same zero-key-required principle as `LIT_SEARCH_PROVIDER` and
+`SYNTHESIS_PROVIDER`). A live Gemini network/API failure inside the graph
+is mapped to a `failed` task, the same pattern as `synthesis`'s Gemini
+error handling. Verified live in this session: naive mode unchanged
+byte-for-byte; `langgraph` mode standalone against `critic` (port 9003)
+with a hand-planted false claim, correctly flagged `supported: false` with
+a real justification alongside genuinely supported claims flagged `true`;
+and the full `chair` pipeline end-to-end with `SYNTHESIS_PROVIDER=gemini`
++ `CRITIC_MODE=langgraph`, confirming `critic`'s verdicts carry real
+per-claim reasoning rather than overlap ratios.
 
 ## Definition of done for each step
 

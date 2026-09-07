@@ -1,8 +1,13 @@
 """AgentExecutor for the critic agent.
 
-Step 3 of the SPEC. Non-streaming internally: one `working` status, one
-final artifact, then `completed`. No input-required branch — critic
-always has enough to produce a (possibly all-unsupported) verdict list.
+Step 3 of the SPEC, rebuilt in Step 7 on a pluggable ClaimVerifier
+(agents/critic/verifier.py) — the naive keyword-overlap checker, or a
+LangGraph + Gemini graph. Non-streaming internally: one `working`
+status, one final artifact, then `completed`/`failed`. No
+input-required branch — critic always has enough to attempt a (possibly
+all-unsupported) verdict list, though a live LangGraph/Gemini call can
+still fail outright (network error, rate limit, empty response), which
+is mapped to a failed task the same way synthesis handles Gemini errors.
 """
 
 from __future__ import annotations
@@ -13,11 +18,12 @@ from uuid import uuid4
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.server.tasks import TaskUpdater
-from a2a.types import DataPart, Part, UnsupportedOperationError
-from a2a.utils import new_task
+from a2a.types import DataPart, Part, Task, UnsupportedOperationError
+from a2a.utils import new_agent_text_message, new_task
 from a2a.utils.errors import ServerError
 
-from agents.critic.matching import verify_claims
+from agents.critic.langgraph_verifier import CriticProviderError
+from agents.critic.verifier import ClaimVerifier
 from common.parts import get_data_part
 
 logger = logging.getLogger(__name__)
@@ -27,6 +33,9 @@ logger = logging.getLogger(__name__)
 
 class CriticAgentExecutor(AgentExecutor):
     """Verifies each claim sentence in a draft answer against its sources."""
+
+    def __init__(self, verifier: ClaimVerifier) -> None:
+        self._verifier = verifier
 
     async def execute(
         self, context: RequestContext, event_queue: EventQueue
@@ -43,7 +52,11 @@ class CriticAgentExecutor(AgentExecutor):
         draft = payload.get("draft", "")
         sources = payload.get("sources", [])
 
-        verdicts = verify_claims(draft, sources)
+        try:
+            verdicts = await self._verifier.verify_claims(draft, sources)
+        except CriticProviderError as exc:
+            await self._fail(updater, task, exc)
+            return
         logger.info("critic: verified %d claim(s)", len(verdicts))
 
         await updater.add_artifact(
@@ -53,6 +66,16 @@ class CriticAgentExecutor(AgentExecutor):
             last_chunk=True,
         )
         await updater.complete()
+
+    async def _fail(
+        self, updater: TaskUpdater, task: Task, exc: CriticProviderError
+    ) -> None:
+        logger.error("critic: %s", exc)
+        await updater.failed(
+            message=new_agent_text_message(
+                f"Claim verification failed: {exc}", task.context_id, task.id
+            )
+        )
 
     async def cancel(
         self, context: RequestContext, event_queue: EventQueue
