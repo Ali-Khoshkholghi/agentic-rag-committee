@@ -36,8 +36,8 @@ covers how this repo uses it.
 | Agent | Port | Skill (Agent Card) | Streams? | Role |
 |---|---|---|---|---|
 | `lit_search` | 9001 | `find-sources` | yes — one source at a time | Finds candidate sources for a topic |
-| `synthesis` | 9002 | `draft-answer` | yes — text chunks | Drafts an answer from those sources |
-| `critic` | 9003 | `verify-claims` | no — single final artifact | Checks the draft's claims against the sources |
+| `synthesis` | 9002 | `draft-answer` | yes — text chunks | Drafts an answer from those sources — agentic, Google ADK-backed by default |
+| `critic` | 9003 | `verify-claims` | no — single final artifact | Checks the draft's claims against the sources — agentic, LangGraph-backed by default |
 | `chair` | 9000 | `research-question` | yes — relays committee progress | Orchestrates the other three; the only agent a human talks to |
 
 ### `lit_search` (9001)
@@ -57,20 +57,48 @@ behind it — the A2A contract never depends on the search API.
 
 Streams a drafted answer as incremental `TextPart` chunks (`append=true`,
 final chunk `lastChunk=true`) rather than returning the whole draft at
-once.
+once. Its A2A contract has never changed since Step 3 — same Agent Card,
+same `draft-answer` skill, same port, same streamed-chunk semantics — but
+its *internal* drafting logic is swappable via `SYNTHESIS_PROVIDER`
+(`agents/synthesis/llm_provider.py`):
 
-Drafting sits behind a swappable `SynthesisProvider` adapter
-(`agents/synthesis/llm_provider.py`), the same pattern as `lit_search`'s
-search provider: `FakeSynthesisProvider` (default, deterministic
-templater, no API key) or `GeminiSynthesisProvider` (real drafting via
-the Google Gemini API). The executor just streams whatever chunks the
-provider yields — it doesn't know or care which one is behind it.
+- `fake` (`agents/synthesis/drafting.py`) — a deterministic templater, no
+  LLM call, no key required.
+- `gemini` (`agents/synthesis/llm_provider.py`'s `GeminiSynthesisProvider`,
+  Step 6) — one raw call to the Gemini `streamGenerateContent` REST
+  endpoint, hand-rolled SSE parsing.
+- `adk` (`agents/synthesis/adk_provider.py`, Step 8) — a single **Google
+  ADK** `Agent` (no tools, no sub-agents, one well-structured agentic
+  call), also backed by Gemini, using ADK's own streaming `Runner` to
+  keep emitting chunks incrementally rather than blocking for the whole
+  draft. Same grounding rules as the `gemini` provider's prompt (answer
+  only from the given sources, paraphrase in its own words, no verbatim
+  quoting, no outside knowledge), just split into an ADK `instruction`
+  (the fixed rules) and a per-request user message (topic + sources +
+  guidance) instead of one folded-together prompt string.
+
+The executor just streams whatever chunks the selected provider
+yields — it doesn't know or care which one is behind it, and a live
+failure from any of the two real providers (API error, timeout, empty
+response) raises the same `SynthesisProviderError`, mapped to
+`TaskState.failed` the same way regardless of which provider raised it.
+
+Together with `critic`'s LangGraph rebuild (Step 7), this makes
+`synthesis` and `critic` the committee's two genuinely agentic
+nodes — each built on a *different* agent framework (Google ADK vs.
+LangGraph), both Gemini-backed, each interoperating over its own
+unchanged A2A contract. `lit_search` and `chair` remain simpler
+non-agentic A2A services by design (a search-provider adapter and an
+orchestrator, respectively) — this project's actual proof-point is that
+the framework behind an A2A agent is fully opaque to every other agent
+in the system, no matter which two frameworks happen to be in play.
 
 The Gemini model currently defaulted to (`gemini-3.6-flash`) does
 internal "thinking" before it emits any visible text, which adds real,
 noticeable latency: expect roughly 20–35 seconds before the *first*
-streamed chunk arrives, even for a short prompt. That's normal, not a
-hang — `debug_client.py`'s elapsed-time prefix will show it plainly.
+streamed chunk arrives, even for a short prompt (both the `gemini` and
+`adk` providers see this). That's normal, not a hang —
+`debug_client.py`'s elapsed-time prefix will show it plainly.
 `FakeSynthesisProvider` has no such delay.
 
 It also implements a real `input-required` pause: before drafting, it
@@ -114,12 +142,12 @@ verification logic is swappable via `CRITIC_MODE`
 
 Defaults to `langgraph` if `GEMINI_API_KEY` is set and `CRITIC_MODE` is
 left unset, otherwise `naive` — same zero-key-required principle as
-`LIT_SEARCH_PROVIDER`/`SYNTHESIS_PROVIDER`. This is the repo's
-interoperability proof: `critic` is built on a completely different
-agent framework (LangGraph) than the rest of the committee (direct API
-calls / naive logic), and no other agent needed to change at all for
-that to work — they only ever talked to `critic` through its Agent Card
-and DataPart contract.
+`LIT_SEARCH_PROVIDER`/`SYNTHESIS_PROVIDER`. Together with `synthesis`'s
+Google ADK rebuild (Step 8, see above), this is the repo's
+interoperability proof: `critic` and `synthesis` are each built on a
+completely different agent framework from one another, and no other
+agent needed to change at all for either rebuild — every agent only ever
+talks to another through its Agent Card and DataPart/TextPart contract.
 
 Against the naive templater's near-verbatim output, the naive checker's
 overlap heuristic is close to trivial (an honestly-echoed sentence will
@@ -220,7 +248,7 @@ TAVILY_API_KEY=
 LIT_SEARCH_PROVIDER=tavily
 
 GEMINI_API_KEY=
-SYNTHESIS_PROVIDER=gemini
+SYNTHESIS_PROVIDER=adk
 # GEMINI_MODEL=gemini-3.6-flash
 
 CRITIC_MODE=langgraph
@@ -231,18 +259,20 @@ CRITIC_MODE=langgraph
 - `TAVILY_API_KEY` — only required when `LIT_SEARCH_PROVIDER=tavily`. If
   it's missing in that case, `lit_search` fails loudly at startup instead
   of on the first search.
-- `SYNTHESIS_PROVIDER` — `fake` (default if unset) or `gemini`. `fake`
-  needs no key and has no response latency.
-- `GEMINI_API_KEY` — only required when `SYNTHESIS_PROVIDER=gemini`, same
-  fail-loud-at-startup behavior if missing. `GEMINI_MODEL` is optional
-  (defaults to `gemini-3.6-flash`) — override it if that model is ever
-  retired; see the `synthesis` section above for the model's latency
-  characteristics.
+- `SYNTHESIS_PROVIDER` — `fake` (default if unset), `gemini`, or `adk`.
+  `fake` needs no key and has no response latency; `gemini` and `adk`
+  both need `GEMINI_API_KEY` and fail loudly at startup if it's missing.
+- `GEMINI_API_KEY` — required for `SYNTHESIS_PROVIDER=gemini`/`adk` and
+  for `CRITIC_MODE=langgraph`, all three sharing the one key. `GEMINI_MODEL`
+  is optional (defaults to `gemini-3.6-flash`, shared by all three) —
+  override it if that model is ever retired, hits a rate limit, or you
+  just want a cheaper/faster one for a given run; see the `synthesis`
+  section above for the default model's latency characteristics.
 - `CRITIC_MODE` — `naive` or `langgraph`. If left unset, defaults to
   `langgraph` when `GEMINI_API_KEY` is set, otherwise `naive` — same
-  zero-key-required principle as the other two toggles above.
-  `langgraph` fails loudly at startup if `GEMINI_API_KEY` is missing,
-  same as `SYNTHESIS_PROVIDER=gemini`.
+  zero-key-required principle as `SYNTHESIS_PROVIDER`. `langgraph` fails
+  loudly at startup if `GEMINI_API_KEY` is missing, same as
+  `SYNTHESIS_PROVIDER=gemini`/`adk`.
 - `.env` is loaded automatically (`python-dotenv`) by `lit_search`,
   `synthesis`, `critic`, and `chair`; you can also just export the vars
   in your shell instead of using a `.env` file.
@@ -292,14 +322,26 @@ for hitting `synthesis`/`critic` directly) and replying to a paused task
 
 Stated plainly, since this is meant to be read, not buried:
 
-- **`synthesis`'s default mode is a naive templater, not an LLM.** With no
-  `GEMINI_API_KEY` set (or `SYNTHESIS_PROVIDER=fake` explicitly),
-  `FakeSynthesisProvider` concatenates source snippets into a fixed
-  sentence template — not real summarization or paraphrasing. This is
-  deliberate (zero-setup, no key needed, no latency) rather than an
-  oversight; see `agents/synthesis/drafting.py`. With
-  `SYNTHESIS_PROVIDER=gemini` it's a real LLM call instead — see the
-  `synthesis` section above.
+- **`synthesis`'s default mode (no key) is a naive templater, not an
+  LLM.** With no `GEMINI_API_KEY` set (or `SYNTHESIS_PROVIDER=fake`
+  explicitly), `FakeSynthesisProvider` concatenates source snippets into
+  a fixed sentence template — not real summarization or paraphrasing.
+  This is deliberate (zero-setup, no key needed, no latency) rather than
+  an oversight; see `agents/synthesis/drafting.py`. With a key present,
+  `SYNTHESIS_PROVIDER=gemini` (raw API call) or `adk` (Google ADK agent,
+  the default once a key exists) both do real, genuinely paraphrased
+  drafting — see the `synthesis` section above.
+- **Gemini's free-tier daily request quota is per-model and easy to
+  exhaust during active development.** It's tracked per API key per
+  model (`generativelanguage.googleapis.com/generate_content_free_tier_requests`,
+  20/day on the default `gemini-3.6-flash` as observed in this repo's
+  sandbox), shared across every agent/provider using that model —
+  `synthesis` (`gemini`/`adk`) and `critic` (`langgraph`) all draw from
+  the same daily bucket. Hitting it surfaces as a `429 RESOURCE_EXHAUSTED`
+  from Gemini, which both `synthesis` and `critic` correctly map to
+  `TaskState.failed` rather than crashing — a real, useful exercise of
+  the failure-handling path, not a bug. `GEMINI_MODEL` can point at a
+  different model with its own separate quota bucket as a workaround.
 - **`critic`'s default mode depends on whether a Gemini key is present.**
   With no `GEMINI_API_KEY` set (or `CRITIC_MODE=naive` explicitly), it
   falls back to the original keyword-overlap heuristic, which has no real
@@ -327,5 +369,6 @@ Stated plainly, since this is meant to be read, not buried:
 
 `SPEC.md` is the original design doc this was built from, step by step
 (fake `lit_search` → debug client → `synthesis`/`critic` → `chair` →
-real search → real `synthesis` LLM → `critic` rebuilt on LangGraph).
-Worth reading if you want the full build rationale, not just the result.
+real search → real `synthesis` LLM → `critic` rebuilt on LangGraph →
+`synthesis` rebuilt on Google ADK). Worth reading if you want the full
+build rationale, not just the result.
