@@ -1,6 +1,15 @@
 __pycache__/
 *.pyc
+.DS_Store
 .venv/
 *.egg-info/
 .env
 venv/
+
+# Step 9: generated local vector store (rebuilt from data/corpus/ via
+# `python -m agents.lit_search.rag.ingest`)
+agents/lit_search/data/chroma_db/
+venv/
+data/chroma_db/ # if not already there
+__pycache__/
+*.pyc

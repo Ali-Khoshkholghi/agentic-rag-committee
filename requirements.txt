@@ -4,3 +4,11 @@ python-dotenv>=1.0
 langgraph>=0.6
 langchain-google-genai>=2.0
 google-adk>=1.0
+
+# Step 9 — agentic RAG foundation for lit_search (ingestion + hybrid retrieval).
+# Only used by agents/lit_search/rag/; the live Tavily-only A2A flow does not
+# import these.
+chromadb>=0.5
+sentence-transformers>=3.0
+rank-bm25>=0.2
+pypdf>=4.0
