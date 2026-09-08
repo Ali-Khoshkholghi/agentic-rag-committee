@@ -1,13 +1,27 @@
-# research-committee
+# agentic-rag-committee
 
 ## What this is
 
-A small multi-agent research assistant — a "committee of agents" — built to
-learn the **A2A (Agent2Agent) protocol** properly, end-to-end, rather than
-just reading about it. It's a portfolio/learning repo, not a production
-service: the goal is a correct, minimal demonstration of Agent Cards, the
+The **agentic-RAG extension** of
+[`research-committee-A2A`](https://github.com/Ali-Khoshkholghi/research-committee-A2A) —
+the same four-agent "committee of agents" over the **A2A (Agent2Agent)
+protocol**, with `lit_search` extended to retrieve from a **local corpus**
+via hybrid retrieval (dense + BM25 + cross-encoder rerank) alongside its
+existing web search.
+
+It is still a portfolio/learning repo, not a production service. The base
+project's point was a correct, minimal demonstration of Agent Cards, the
 A2A task lifecycle, JSON-RPC+SSE streaming, and multi-hop `input-required`
-pause/resume — not feature completeness or real answer quality.
+pause/resume. This fork's point is layering a real retrieval-augmented
+pipeline into one agent **without changing its A2A contract or any other
+agent**.
+
+**The base project is unchanged here.** `chair`, `synthesis`, `critic`,
+and `lit_search`'s original Tavily-only search behaviour are byte-for-byte
+what they are upstream — same Agent Cards, same skills, same ports, same
+streamed-chunk semantics, same `.env` toggles. Only `lit_search` gained
+new *internals* (`agents/lit_search/rag/`), and as of Step 9 they are not
+yet wired into the live request path — see **Current status** below.
 
 A human asks a research question. Four independent agents collaborate over
 A2A to answer it: `lit_search` finds sources, `synthesis` drafts an answer,
@@ -35,7 +49,7 @@ covers how this repo uses it.
 
 | Agent | Port | Skill (Agent Card) | Streams? | Role |
 |---|---|---|---|---|
-| `lit_search` | 9001 | `find-sources` | yes — one source at a time | Finds candidate sources for a topic |
+| `lit_search` | 9001 | `find-sources` | yes — one source at a time | Finds candidate sources for a topic. Web search today; a local hybrid-retrieval corpus is being layered in (Steps 9–11) |
 | `synthesis` | 9002 | `draft-answer` | yes — text chunks | Drafts an answer from those sources — agentic, Google ADK-backed by default |
 | `critic` | 9003 | `verify-claims` | no — single final artifact | Checks the draft's claims against the sources — agentic, LangGraph-backed by default |
 | `chair` | 9000 | `research-question` | yes — relays committee progress | Orchestrates the other three; the only agent a human talks to |
@@ -52,6 +66,53 @@ Search itself sits behind a swappable `SearchProvider` adapter
 deterministic, no API key) or `TavilySearchProvider` (real web search).
 The executor's streaming/task logic doesn't know or care which one is
 behind it — the A2A contract never depends on the search API.
+
+**New in this fork:** a standalone local-retrieval stack under
+`agents/lit_search/rag/` (see the next section). It is fully independent
+of the A2A executor for now — `agent_executor.py` still calls only the
+`SearchProvider` — so `lit_search`'s external behaviour is exactly the
+upstream project's until Step 10 wires the two together.
+
+### Agentic RAG in `lit_search` (`agents/lit_search/rag/`)
+
+A standalone local-retrieval stack: a corpus of documents in
+`agents/lit_search/data/corpus/` turned into an index that hybrid-searches
+better than either dense or keyword search alone. It reads no environment
+variables and needs no API key — the embedding and rerank models run
+locally on CPU (downloaded once from the Hugging Face hub on first use).
+Three small modules:
+
+- **`ingest.py`** — reads every `.pdf`, `.md` / `.markdown`, or `.txt`
+  file in the corpus directory (PDF text extracted with **`pypdf`**), and
+  splits each document with a structure-aware **recursive splitter** —
+  heading → paragraph → line → sentence → word — into **~500-token
+  windows with ~50-token verbatim overlap**. Each chunk is embedded with
+  `sentence-transformers` **`all-MiniLM-L6-v2`** (384-dim; its native
+  256-token input limit raised to 512 so a full chunk embeds without
+  truncation), and chunks + embeddings + per-chunk source metadata
+  (source filename, document title, chunk index) are persisted to a local
+  **Chroma** DB at `agents/lit_search/data/chroma_db/` (generated,
+  git-ignored). Each run rebuilds the collection from scratch.
+
+- **`retriever.py`** — `HybridRetriever` runs two retrievers over the
+  *same* stored chunks: **dense** cosine search against Chroma, and
+  **sparse** BM25 (**`rank_bm25`**) built in memory from those exact chunk
+  texts. The two rank lists are merged with **Reciprocal Rank Fusion**
+  (`k = 60`), and the fused candidate pool (default 20) is **reranked with
+  a cross-encoder** (`cross-encoder/ms-marco-MiniLM-L-6-v2`) down to
+  top-k (default 5). Each result carries its text, source/title/chunk
+  index, and every intermediate signal — dense rank, sparse rank, RRF
+  score, rerank score.
+
+- **`demo.py`** — a standalone acceptance script: ingest the corpus, then
+  run a set of sample queries through `HybridRetriever` and print the
+  ranked/reranked chunks with their source metadata and scores. Not
+  imported anywhere; it only exercises the two modules above.
+
+The corpus today is five arXiv papers on retrieval and
+retrieval-augmented generation — REALM, DPR, RAG, Self-RAG, and CRAG. Drop
+more files into the corpus directory and re-run `ingest.py` to refresh
+(see [Build the vector store](#build-the-vector-store) below).
 
 ### `synthesis` (9002)
 
@@ -192,13 +253,26 @@ exactly this purpose) to continue where it left off.
            ┌───────────┘   │   └───────────┐
            ▼                ▼               ▼
    ┌───────────────┐ ┌───────────────┐ ┌───────────────┐
-   │   lit_search   │ │   synthesis   │ │    critic     │
-   │     :9001      │ │     :9002     │ │     :9003     │
-   │ find-sources   │ │ draft-answer  │ │ verify-claims │
-   └────────────────┘ └───────────────┘ └───────────────┘
+   │  lit_search   │ │   synthesis   │ │    critic     │
+   │     :9001     │ │     :9002     │ │     :9003     │
+   │ find-sources  │ │ draft-answer  │ │ verify-claims │
+   └───────┬───────┘ └───────────────┘ └───────────────┘
+           :  (Step 10+; not wired into the A2A path yet)
+           v
+   agents/lit_search/rag/
+     corpus (PDF/MD/TXT)  --ingest.py-->  Chroma DB
+     query  -->  dense search  \
+                                 >-- RRF --> cross-encoder rerank --> top-k
+                 BM25 search   /
+     (retriever.py)
 ```
 
-Request flow for one research question:
+`chair` orchestrates `synthesis`, `critic`, and `lit_search` over A2A
+exactly as in the base project. The `rag/` box hangs off `lit_search`
+but is reachable only through `demo.py` today; Step 10 connects it to the
+executor.
+
+Request flow for one research question (unchanged from the base project):
 
 1. `chair` receives the question from the human and generates one
    `contextId` for the whole exchange.
@@ -230,9 +304,40 @@ intermediary (`chair`) rather than terminating at the immediate caller.
 
 ```bash
 git clone <this-repo>
-cd research-committee-A2A
+cd agenticRAG-research-committee-A2A
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+```
+
+`requirements.txt` carries the base project's dependencies plus, for the
+`agents/lit_search/rag/` stack:
+
+- `chromadb` — the local persistent vector store.
+- `sentence-transformers` — the `all-MiniLM-L6-v2` embedding model and the
+  `ms-marco-MiniLM-L-6-v2` cross-encoder reranker (pulls in `torch`).
+- `rank-bm25` — the sparse BM25 retriever.
+- `pypdf` — PDF text extraction for the corpus.
+
+These are only imported by `agents/lit_search/rag/`; running the
+committee itself does not load them.
+
+### Build the vector store
+
+```bash
+python -m agents.lit_search.rag.ingest
+```
+
+Reads every document in `agents/lit_search/data/corpus/` and writes the
+Chroma DB to `agents/lit_search/data/chroma_db/` (git-ignored — rebuild it
+from the corpus rather than committing it). Add or remove documents in the
+corpus directory and re-run to refresh; each run rebuilds the collection
+from scratch. First run also downloads the two MiniLM models (~175 MB).
+
+Then exercise retrieval on its own:
+
+```bash
+python -m agents.lit_search.rag.demo                 # ingest + sample queries
+python -m agents.lit_search.rag.demo --skip-ingest --query "your question" --top-k 3
 ```
 
 ### Configuration
@@ -275,7 +380,8 @@ CRITIC_MODE=langgraph
   `SYNTHESIS_PROVIDER=gemini`/`adk`.
 - `.env` is loaded automatically (`python-dotenv`) by `lit_search`,
   `synthesis`, `critic`, and `chair`; you can also just export the vars
-  in your shell instead of using a `.env` file.
+  in your shell instead of using a `.env` file. The `rag/` stack reads no
+  environment variables at all.
 
 ### Start the agents
 
@@ -318,9 +424,103 @@ python -m common.debug_client --url http://localhost:9000 \
 for hitting `synthesis`/`critic` directly) and replying to a paused task
 (`--task-id`/`--context-id`) — see its own `--help` and docstring.
 
+## Current status
+
+- **Step 9 — ingestion + hybrid retrieval: complete.** `ingest.py` and
+  `retriever.py` exist and work standalone; `demo.py` is the acceptance
+  check. `lit_search`'s A2A behaviour is untouched — the whole committee
+  still runs end to end exactly as in the base project.
+- **Step 10 — routing + self-correction: next.** A single-LLM `router`
+  that decides per sub-query whether to hit the vector store, web search,
+  or both; a two-node LangGraph `judge` / `reformulate_and_retrieve` loop
+  that scores merged evidence for sufficiency and retries with a
+  reformulated query when it's weak; and the wiring of both into
+  `agents/lit_search/agent_executor.py` behind the same A2A contract.
+- **Step 11 — RAGAS evaluation: after that.** Context precision/recall
+  against the retriever alone, faithfulness against full `lit_search`
+  output, results saved under `eval/`.
+
+See [`SPEC.md`](SPEC.md) for the full Step 9–11 spec.
+
+## Retrieval discrimination check
+
+`demo.py`, run against the five-paper corpus above — chosen because they
+overlap heavily in vocabulary: two describe an evaluate-then-act RAG loop
+(Self-RAG, CRAG), two describe a dense retriever feeding a reader (REALM,
+DPR). Ingest produces 198 chunks:
+
+| File | Paper | Chunks |
+|---|---|---|
+| `2002.08909v1.pdf` | REALM: Retrieval-Augmented LM Pre-Training | 31 |
+| `2004.04906v3.pdf` | DPR: Dense Passage Retrieval for Open-Domain QA | 32 |
+| `2005.11401v4.pdf` | RAG for Knowledge-Intensive NLP Tasks | 42 |
+| `2310.11511v1.pdf` | Self-RAG | 60 |
+| `2401.15884v3.pdf` | CRAG: Corrective RAG | 33 |
+
+Six test queries — five targeting a mechanism that belongs to exactly one
+paper, one deliberately ambiguous:
+
+| Query targets | Expected owner | Rank 1 | Top-5 by source |
+|---|---|---|---|
+| "Correct / Incorrect / Ambiguous" confidence labels | CRAG | CRAG | CRAG ×5 |
+| reflection tokens `ISREL` `ISSUP` `ISUSE` | Self-RAG | Self-RAG | Self-RAG ×5 |
+| decompose-then-recompose + web-search extension | CRAG | CRAG | CRAG ×5 |
+| dual-encoder, in-batch negatives, BM25 hard negatives | DPR | DPR | DPR ×5 |
+| masked-LM-pretrained latent knowledge retriever | REALM | REALM | REALM ×5 |
+| "retrieved passages to improve open-domain QA" (ambiguous) | none in particular | DPR | DPR ×4, RAG ×1 |
+
+Clean top-5 separation on all five targeted queries, and a sensible split
+on the ambiguous one (DPR and RAG both legitimately own it; no false
+confidence forcing a single winner).
+
+The hybrid pipeline is doing real work, not just running — visible in the
+per-result ranks. For the Self-RAG token query:
+
+- a chunk at **dense rank 12**, BM25 rank 1 (BM25 caught the literal token
+  `ISREL` that the embedding buried) is reranked to result #3;
+- a chunk **absent from the dense top-20 entirely**, BM25 rank 4, is
+  reranked to result #5.
+
+For the CRAG decompose-then-recompose query, a chunk at **dense rank 18**,
+BM25 rank 1 is fused and reranked all the way to result #1. Without the
+sparse arm or the reranker those chunks don't surface.
+
+This is spot-checking on six hand-written queries, not a measured
+evaluation — quantifying it with RAGAS is Step 11.
+
 ## Current limitations / known TODOs
 
 Stated plainly, since this is meant to be read, not buried:
+
+### Agentic RAG layer (this fork)
+
+- **Not wired into the live agent yet.** `agents/lit_search/rag/` is
+  reachable only via `demo.py`. `lit_search`'s A2A responses still come
+  purely from web search. Connecting the two is Step 10, and until then
+  the retrieval quality above has no effect on what the committee
+  actually answers.
+- **Small, older local models.** `all-MiniLM-L6-v2` (embeddings) and
+  `ms-marco-MiniLM-L-6-v2` (reranker) are chosen for "runs on a laptop
+  CPU with no key", not for being state of the art. The embedding model
+  is natively a 256-token model run at 512; chunks near the ~500-token
+  target can still be truncated by the cross-encoder's 512-token limit at
+  rerank time.
+- **PDF extraction is `pypdf`-quality.** Two-column academic layouts,
+  ligatures, and math come through imperfectly; the derived document
+  `title` is a best-effort guess from the first page and often includes
+  a few author-name tokens. The `source` filename is the reliable
+  identifier. Swap in `pymupdf` in `ingest.py` if a given paper extracts
+  badly.
+- **The corpus is five papers.** Enough to demonstrate discrimination,
+  not enough to say anything about retrieval quality at scale. BM25 is
+  rebuilt in memory from the full collection on every retriever startup;
+  there is no incremental ingest — adding a document means a full
+  re-embed and rebuild.
+- **RRF weights, `k = 60`, the candidate-pool size, and the rerank cutoff
+  are defaults, not tuned** — Step 11's evaluation is what's supposed to
+  tune them.
+
+### Base project (unchanged, carried over from `research-committee-A2A`)
 
 - **`synthesis`'s default mode (no key) is a naive templater, not an
   LLM.** With no `GEMINI_API_KEY` set (or `SYNTHESIS_PROVIDER=fake`
@@ -367,8 +567,14 @@ Stated plainly, since this is meant to be read, not buried:
 
 ## Build history
 
-`SPEC.md` is the original design doc this was built from, step by step
-(fake `lit_search` → debug client → `synthesis`/`critic` → `chair` →
-real search → real `synthesis` LLM → `critic` rebuilt on LangGraph →
-`synthesis` rebuilt on Google ADK). Worth reading if you want the full
-build rationale, not just the result.
+This fork picks up from
+[`research-committee-A2A`](https://github.com/Ali-Khoshkholghi/research-committee-A2A)
+at the end of its Step 8. That project's `SPEC.md` is the original design
+doc it was built from, step by step (fake `lit_search` → debug client →
+`synthesis`/`critic` → `chair` → real search → real `synthesis` LLM →
+`critic` rebuilt on LangGraph → `synthesis` rebuilt on Google ADK).
+
+This repo's [`SPEC.md`](SPEC.md) carries Steps 9–11: the agentic-RAG
+extension of `lit_search` — ingestion + hybrid retrieval (Step 9, done),
+routing + a self-correction loop (Step 10), and RAGAS evaluation
+(Step 11).
