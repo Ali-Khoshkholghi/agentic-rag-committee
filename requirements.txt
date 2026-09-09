@@ -12,3 +12,11 @@ chromadb>=0.5
 sentence-transformers>=3.0
 rank-bm25>=0.2
 pypdf>=4.0
+
+# Step 11 — RAGAS evaluation. Only used by eval/; no agent imports these.
+# `rapidfuzz` backs the non-LLM context-precision/recall metrics. If ragas
+# fails to import (missing liblzma on the interpreter, or a stale
+# langchain-community path), eval/_ragas_compat.py installs the shims —
+# it is imported before ragas by eval/run_eval.py.
+ragas>=0.4,<0.5
+rapidfuzz>=3.0

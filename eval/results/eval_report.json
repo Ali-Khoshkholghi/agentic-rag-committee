@@ -1,0 +1,608 @@
+{
+  "config": {
+    "generated_at": "2026-09-09T13:21:34+00:00",
+    "git_sha": "0ce9fbe",
+    "gemini_model": "gemini-flash-lite-latest",
+    "top_k": 5,
+    "max_retries": 2,
+    "rate_limit_rpm": 0.0,
+    "gemini_timeout_s": 120.0,
+    "gemini_max_retries": 8,
+    "only": null,
+    "merged": true,
+    "eval_set_size": 15
+  },
+  "aggregates": {
+    "retriever": {
+      "n_queries": 9,
+      "context_precision_mean": 0.6208,
+      "context_recall_mean": 0.3634,
+      "corpus_precision_mean": 0.9556
+    },
+    "pipeline_by_category": {
+      "local": {
+        "n_queries": 9,
+        "faithfulness_mean": 1.0,
+        "context_relevance_mean": 0.7832,
+        "retry_count_mean": 0.6667,
+        "judge_sufficient_rate": 0.8889
+      },
+      "web": {
+        "n_queries": 3,
+        "faithfulness_mean": 0.7778,
+        "context_relevance_mean": 0.9216,
+        "retry_count_mean": 1.3333,
+        "judge_sufficient_rate": 0.3333
+      },
+      "vague": {
+        "n_queries": 3,
+        "faithfulness_mean": 1.0,
+        "context_relevance_mean": 0.4639,
+        "retry_count_mean": 2.0,
+        "judge_sufficient_rate": 0.6667
+      },
+      "ALL": {
+        "n_queries": 15,
+        "faithfulness_mean": 0.9556,
+        "context_relevance_mean": 0.747,
+        "retry_count_mean": 1.0667,
+        "judge_sufficient_rate": 0.7333
+      }
+    },
+    "pipeline_degraded_ids": []
+  },
+  "retriever": [
+    {
+      "id": "L1-dpr-negatives",
+      "question": "What negative passages does DPR use to train its retriever?",
+      "gold_source": "2004.04906v3.pdf",
+      "retrieved_sources": [
+        "2004.04906v3.pdf",
+        "2004.04906v3.pdf",
+        "2004.04906v3.pdf",
+        "2004.04906v3.pdf",
+        "2004.04906v3.pdf"
+      ],
+      "n_gold_chunks": 6,
+      "corpus_precision": 1.0,
+      "context_precision": 1.0,
+      "context_recall": 0.5
+    },
+    {
+      "id": "L2-dpr-encoder",
+      "question": "What encoder architecture does DPR use to embed questions and passages?",
+      "gold_source": "2004.04906v3.pdf",
+      "retrieved_sources": [
+        "2004.04906v3.pdf",
+        "2004.04906v3.pdf",
+        "2004.04906v3.pdf",
+        "2004.04906v3.pdf",
+        "2004.04906v3.pdf"
+      ],
+      "n_gold_chunks": 5,
+      "corpus_precision": 1.0,
+      "context_precision": 0.5833,
+      "context_recall": 0.4
+    },
+    {
+      "id": "L3-selfrag-reflection-tokens",
+      "question": "What reflection tokens does Self-RAG generate and what are they for?",
+      "gold_source": "2310.11511v1.pdf",
+      "retrieved_sources": [
+        "2310.11511v1.pdf",
+        "2310.11511v1.pdf",
+        "2310.11511v1.pdf",
+        "2310.11511v1.pdf",
+        "2310.11511v1.pdf"
+      ],
+      "n_gold_chunks": 3,
+      "corpus_precision": 1.0,
+      "context_precision": 0.0,
+      "context_recall": 0.0
+    },
+    {
+      "id": "L4-selfrag-retrieve-on-demand",
+      "question": "How does Self-RAG decide when to retrieve during generation?",
+      "gold_source": "2310.11511v1.pdf",
+      "retrieved_sources": [
+        "2310.11511v1.pdf",
+        "2401.15884v3.pdf",
+        "2310.11511v1.pdf",
+        "2310.11511v1.pdf",
+        "2401.15884v3.pdf"
+      ],
+      "n_gold_chunks": 3,
+      "corpus_precision": 0.6,
+      "context_precision": 0.0,
+      "context_recall": 0.0
+    },
+    {
+      "id": "L5-crag-evaluator-labels",
+      "question": "What confidence labels does CRAG's retrieval evaluator assign to retrieved documents?",
+      "gold_source": "2401.15884v3.pdf",
+      "retrieved_sources": [
+        "2401.15884v3.pdf",
+        "2401.15884v3.pdf",
+        "2401.15884v3.pdf",
+        "2401.15884v3.pdf",
+        "2401.15884v3.pdf"
+      ],
+      "n_gold_chunks": 13,
+      "corpus_precision": 1.0,
+      "context_precision": 0.8042,
+      "context_recall": 0.3077
+    },
+    {
+      "id": "L6-crag-decompose-recompose",
+      "question": "What is the decompose-then-recompose step in CRAG for?",
+      "gold_source": "2401.15884v3.pdf",
+      "retrieved_sources": [
+        "2401.15884v3.pdf",
+        "2401.15884v3.pdf",
+        "2401.15884v3.pdf",
+        "2401.15884v3.pdf",
+        "2401.15884v3.pdf"
+      ],
+      "n_gold_chunks": 1,
+      "corpus_precision": 1.0,
+      "context_precision": 1.0,
+      "context_recall": 1.0
+    },
+    {
+      "id": "L7-realm-pretraining",
+      "question": "How is REALM's retriever pre-trained and how is its index kept current?",
+      "gold_source": "2002.08909v1.pdf",
+      "retrieved_sources": [
+        "2002.08909v1.pdf",
+        "2002.08909v1.pdf",
+        "2002.08909v1.pdf",
+        "2002.08909v1.pdf",
+        "2002.08909v1.pdf"
+      ],
+      "n_gold_chunks": 4,
+      "corpus_precision": 1.0,
+      "context_precision": 0.3333,
+      "context_recall": 0.25
+    },
+    {
+      "id": "L8-rag-sequence-vs-token",
+      "question": "What is the difference between RAG-Sequence and RAG-Token?",
+      "gold_source": "2005.11401v4.pdf",
+      "retrieved_sources": [
+        "2005.11401v4.pdf",
+        "2005.11401v4.pdf",
+        "2005.11401v4.pdf",
+        "2005.11401v4.pdf",
+        "2005.11401v4.pdf"
+      ],
+      "n_gold_chunks": 13,
+      "corpus_precision": 1.0,
+      "context_precision": 1.0,
+      "context_recall": 0.3846
+    },
+    {
+      "id": "L9-rag-nonparametric-memory",
+      "question": "What does RAG (Lewis et al.) use as its non-parametric memory?",
+      "gold_source": "2005.11401v4.pdf",
+      "retrieved_sources": [
+        "2005.11401v4.pdf",
+        "2005.11401v4.pdf",
+        "2005.11401v4.pdf",
+        "2005.11401v4.pdf",
+        "2005.11401v4.pdf"
+      ],
+      "n_gold_chunks": 7,
+      "corpus_precision": 1.0,
+      "context_precision": 0.8667,
+      "context_recall": 0.4286
+    }
+  ],
+  "pipeline": [
+    {
+      "id": "L1-dpr-negatives",
+      "category": "local",
+      "question": "What negative passages does DPR use to train its retriever?",
+      "initial_route": "vector_store",
+      "routes": [
+        "vector_store",
+        "vector_store"
+      ],
+      "retry_count": 1,
+      "judge_sufficient": true,
+      "n_sources": 8,
+      "source_origins": [
+        "vector_store",
+        "vector_store",
+        "vector_store",
+        "vector_store",
+        "vector_store",
+        "vector_store",
+        "vector_store",
+        "vector_store"
+      ],
+      "final_query": "DPR training negative passages BM25 in-batch negatives Dense Passage Retrieval",
+      "answer": "Based on the provided sources, DPR utilizes several types of negative passages for training its retriever, including random passages, BM25-retrieved passages, and gold passages (which are positive passages taken from other questions). Additionally, it uses \"hard\" negative passages that achieve high BM25 scores for a given question but do not actually contain the correct answer string.",
+      "elapsed_s": 4.9,
+      "faithfulness": 1.0,
+      "context_relevance": 0.7
+    },
+    {
+      "id": "L2-dpr-encoder",
+      "category": "local",
+      "question": "What encoder architecture does DPR use to embed questions and passages?",
+      "initial_route": "vector_store",
+      "routes": [
+        "vector_store",
+        "vector_store"
+      ],
+      "retry_count": 1,
+      "judge_sufficient": true,
+      "n_sources": 7,
+      "source_origins": [
+        "vector_store",
+        "vector_store",
+        "vector_store",
+        "vector_store",
+        "vector_store",
+        "vector_store",
+        "vector_store"
+      ],
+      "final_query": "DPR question encoder passage encoder underlying architecture BERT",
+      "answer": "DPR employs a bi-encoder architecture that utilizes two independent BERT-base networks to generate question and passage representations. Specifically, it relies on BERT-based encoders for both the query and the document/passage embeddings.",
+      "elapsed_s": 62.7,
+      "faithfulness": 1.0,
+      "context_relevance": 0.8542
+    },
+    {
+      "id": "L3-selfrag-reflection-tokens",
+      "category": "local",
+      "question": "What reflection tokens does Self-RAG generate and what are they for?",
+      "initial_route": "vector_store",
+      "routes": [
+        "vector_store",
+        "vector_store",
+        "vector_store"
+      ],
+      "retry_count": 2,
+      "judge_sufficient": false,
+      "n_sources": 6,
+      "source_origins": [
+        "vector_store",
+        "vector_store",
+        "vector_store",
+        "vector_store",
+        "vector_store",
+        "vector_store"
+      ],
+      "final_query": "Self-RAG exact reflection tokens list vocabulary",
+      "answer": "Self-RAG generates special reflection tokens that act as critique markers alongside standard text predictions. These tokens are used to determine when a retrieval is needed, evaluate whether retrieved passages are relevant to the input, and assess if the generated response segments are supported by the evidence.",
+      "elapsed_s": 53.5,
+      "faithfulness": 1.0,
+      "context_relevance": 0.81
+    },
+    {
+      "id": "L4-selfrag-retrieve-on-demand",
+      "category": "local",
+      "question": "How does Self-RAG decide when to retrieve during generation?",
+      "initial_route": "vector_store",
+      "routes": [
+        "vector_store",
+        "vector_store"
+      ],
+      "retry_count": 1,
+      "judge_sufficient": true,
+      "n_sources": 7,
+      "source_origins": [
+        "vector_store",
+        "vector_store",
+        "vector_store",
+        "vector_store",
+        "vector_store",
+        "vector_store",
+        "vector_store"
+      ],
+      "final_query": "Self-RAG reflection tokens retrieval trigger mechanism during generation",
+      "answer": "Self-RAG determines when to retrieve information by utilizing special reflection tokens generated alongside text output based on the input prompt and preceding generations. Specifically, it predicts whether augmenting the continued generation with retrieved passages would be helpful, or it triggers retrieval when the normalized probability of generating a specific retrieval token surpasses a designated threshold.",
+      "elapsed_s": 142.0,
+      "faithfulness": 1.0,
+      "context_relevance": 0.7
+    },
+    {
+      "id": "L5-crag-evaluator-labels",
+      "category": "local",
+      "question": "What confidence labels does CRAG's retrieval evaluator assign to retrieved documents?",
+      "initial_route": "vector_store",
+      "routes": [
+        "vector_store"
+      ],
+      "retry_count": 0,
+      "judge_sufficient": true,
+      "n_sources": 5,
+      "source_origins": [
+        "vector_store",
+        "vector_store",
+        "vector_store",
+        "vector_store",
+        "vector_store"
+      ],
+      "final_query": "What confidence labels does CRAG's retrieval evaluator assign to retrieved documents?",
+      "answer": "Based on the provided sources, CRAG's retrieval evaluator assigns three optional confidence values to the retrieved documents: [CORRECT], [INCORRECT], or [AMBIGUOUS]. These confidence degrees are determined based on the evaluator's calculated relevance scores and comparison against set thresholds.",
+      "elapsed_s": 2.7,
+      "faithfulness": 1.0,
+      "context_relevance": 0.8042
+    },
+    {
+      "id": "L6-crag-decompose-recompose",
+      "category": "local",
+      "question": "What is the decompose-then-recompose step in CRAG for?",
+      "initial_route": "vector_store",
+      "routes": [
+        "vector_store"
+      ],
+      "retry_count": 0,
+      "judge_sufficient": true,
+      "n_sources": 5,
+      "source_origins": [
+        "vector_store",
+        "vector_store",
+        "vector_store",
+        "vector_store",
+        "vector_store"
+      ],
+      "final_query": "What is the decompose-then-recompose step in CRAG for?",
+      "answer": "In CRAG, the decompose-then-recompose algorithm serves as a knowledge refinement method used when retrieved documents are deemed correct. It works by breaking down retrieved text into smaller units, filtering out unhelpful or noisy information, and extracting the most crucial knowledge strips. This process optimizes the utilization of retrieved data and eliminates redundant contexts.",
+      "elapsed_s": 2.9,
+      "faithfulness": 1.0,
+      "context_relevance": 0.8056
+    },
+    {
+      "id": "L7-realm-pretraining",
+      "category": "local",
+      "question": "How is REALM's retriever pre-trained and how is its index kept current?",
+      "initial_route": "vector_store",
+      "routes": [
+        "vector_store"
+      ],
+      "retry_count": 0,
+      "judge_sufficient": true,
+      "n_sources": 5,
+      "source_origins": [
+        "vector_store",
+        "vector_store",
+        "vector_store",
+        "vector_store",
+        "vector_store"
+      ],
+      "final_query": "How is REALM's retriever pre-trained and how is its index kept current?",
+      "answer": "REALM's retriever is pre-trained by utilizing a performance-based signal from unsupervised text, where successful retrievals that enhance prediction accuracy and language model perplexity are rewarded through backpropagation. To keep its index current during pre-training, REALM operates two parallel jobs: a primary trainer job that updates parameters and a secondary index builder job that embeds and indexes documents in the background. Once a new index is constructed, it is sent back to the trainer, resulting in approximately one index refresh per 500 training steps.",
+      "elapsed_s": 17.9,
+      "faithfulness": 1.0,
+      "context_relevance": 0.75
+    },
+    {
+      "id": "L8-rag-sequence-vs-token",
+      "category": "local",
+      "question": "What is the difference between RAG-Sequence and RAG-Token?",
+      "initial_route": "vector_store",
+      "routes": [
+        "vector_store"
+      ],
+      "retry_count": 0,
+      "judge_sufficient": true,
+      "n_sources": 5,
+      "source_origins": [
+        "vector_store",
+        "vector_store",
+        "vector_store",
+        "vector_store",
+        "vector_store"
+      ],
+      "final_query": "What is the difference between RAG-Sequence and RAG-Token?",
+      "answer": "The primary difference between the two models lies in how they utilize retrieved documents during text generation. The RAG-Sequence model relies on the exact same retrieved document to predict every target token in the entire sequence. In contrast, the RAG-Token model can select a different latent document for each individual target token, allowing the generator to combine content from multiple documents within a single answer.",
+      "elapsed_s": 2.5,
+      "faithfulness": 1.0,
+      "context_relevance": 1.0
+    },
+    {
+      "id": "L9-rag-nonparametric-memory",
+      "category": "local",
+      "question": "What does RAG (Lewis et al.) use as its non-parametric memory?",
+      "initial_route": "vector_store",
+      "routes": [
+        "vector_store",
+        "vector_store"
+      ],
+      "retry_count": 1,
+      "judge_sufficient": true,
+      "n_sources": 8,
+      "source_origins": [
+        "vector_store",
+        "vector_store",
+        "vector_store",
+        "vector_store",
+        "vector_store",
+        "vector_store",
+        "vector_store",
+        "vector_store"
+      ],
+      "final_query": "Lewis et al. RAG model non-parametric memory Wikipedia dense passage retrieval corpus",
+      "answer": "In RAG (Lewis et al.), the non-parametric memory consists of a dense vector index of Wikipedia. This external memory is accessed using a pre-trained neural retriever.",
+      "elapsed_s": 83.2,
+      "faithfulness": 1.0,
+      "context_relevance": 0.625
+    },
+    {
+      "id": "W1-post-crag-methods",
+      "category": "web",
+      "question": "What retrieval-augmented generation methods introduced after 2024 improve on CRAG and Self-RAG, and how?",
+      "initial_route": "web",
+      "routes": [
+        "web",
+        "web",
+        "web"
+      ],
+      "retry_count": 2,
+      "judge_sufficient": false,
+      "n_sources": 8,
+      "source_origins": [
+        "web",
+        "web",
+        "web",
+        "web",
+        "web",
+        "web",
+        "web",
+        "web"
+      ],
+      "final_query": "retrieval-augmented generation methods after 2024 improving CRAG Self-RAG",
+      "answer": "Based on the provided sources, there is no mention of any retrieval-augmented generation methods introduced after 2024 that improve upon CRAG and Self-RAG. The sources only reference frameworks and benchmarks from 2024 or earlier, such as Self-RAG, CRAG, RAFT, and ActiveRAG.",
+      "elapsed_s": 23.3,
+      "faithfulness": 0.3333,
+      "context_relevance": 0.9107
+    },
+    {
+      "id": "W2-production-vector-dbs",
+      "category": "web",
+      "question": "Which vector databases are most widely used for production RAG systems in 2025?",
+      "initial_route": "web",
+      "routes": [
+        "web"
+      ],
+      "retry_count": 0,
+      "judge_sufficient": true,
+      "n_sources": 4,
+      "source_origins": [
+        "web",
+        "web",
+        "web",
+        "web"
+      ],
+      "final_query": "Which vector databases are most widely used for production RAG systems in 2025?",
+      "answer": "For production RAG systems, pgvector is frequently highlighted as a top choice for teams leveraging existing Postgres infrastructure, while Pinecone serves as a strong alternative for fully managed operations or strict latency requirements. As systems scale beyond millions of vectors, dedicated production-grade solutions like Milvus, Qdrant, and Weaviate become widely utilized for high-volume workloads and better scalability.",
+      "elapsed_s": 16.3,
+      "faithfulness": 1.0,
+      "context_relevance": 1.0
+    },
+    {
+      "id": "W3-mteb-sota-embedding",
+      "category": "web",
+      "question": "What is the current state-of-the-art embedding model on the MTEB retrieval leaderboard?",
+      "initial_route": "web",
+      "routes": [
+        "web",
+        "web",
+        "web"
+      ],
+      "retry_count": 2,
+      "judge_sufficient": false,
+      "n_sources": 7,
+      "source_origins": [
+        "web",
+        "web",
+        "web",
+        "web",
+        "web",
+        "web",
+        "web"
+      ],
+      "final_query": "current state-of-the-art embedding model MTEB retrieval leaderboard ranking",
+      "answer": "Based on the provided sources, top spots on the MTEB leaderboard include models like QZhou-Embedding and Qwen3-Embedding-8B for 2025, while models such as NV-Embed-v2 and NV-Embed have previously held top rankings on English tasks or benchmark scores. Additionally, Google's `gemini-embedding-001` and Alibaba's `Qwen3-Embedding-8B` have achieved top positions on the MTEB Multilingual leaderboard.",
+      "elapsed_s": 43.4,
+      "faithfulness": 1.0,
+      "context_relevance": 0.8542
+    },
+    {
+      "id": "V1-make-it-better",
+      "category": "vague",
+      "question": "how do you make it better?",
+      "initial_route": "web",
+      "routes": [
+        "web",
+        "web",
+        "web"
+      ],
+      "retry_count": 2,
+      "judge_sufficient": true,
+      "n_sources": 8,
+      "source_origins": [
+        "web",
+        "web",
+        "web",
+        "web",
+        "web",
+        "web",
+        "web",
+        "web"
+      ],
+      "final_query": "how to improve machine learning model performance",
+      "answer": "To improve machine learning models, you can clean and preprocess data by handling outliers and missing values, as well as increase data volume and quality to help the model learn more patterns. Additionally, you can perform feature selection and engineering to reduce noise, experiment with different algorithms, and optimize performance through hyperparameter tuning. Other effective strategies include using ensemble methods to combine multiple models, starting with simple configurations and incrementally adding improvements, and continuously monitoring the model after deployment.",
+      "degraded": false,
+      "degraded_notes": [],
+      "elapsed_s": 11.7,
+      "faithfulness": 1.0,
+      "context_relevance": 0.6917
+    },
+    {
+      "id": "V2-improve-the-retriever-part",
+      "category": "vague",
+      "question": "how do they improve the retriever part?",
+      "initial_route": "vector_store",
+      "routes": [
+        "vector_store",
+        "both",
+        "both"
+      ],
+      "retry_count": 2,
+      "judge_sufficient": true,
+      "n_sources": 8,
+      "source_origins": [
+        "vector_store",
+        "vector_store",
+        "vector_store",
+        "vector_store",
+        "vector_store",
+        "web",
+        "web",
+        "web"
+      ],
+      "final_query": "specific mechanisms and steps for improving the retriever component in RAG CRAG hybrid search fine-tuning",
+      "answer": "To improve retrieval performance, systems can implement a hybrid search approach that combines sparse keyword search (such as BM25) with dense vector search to capture both exact terms and semantic meaning [5]. Additionally, methods like CRAG introduce a lightweight retrieval evaluator to assess document quality and trigger different actions\u2014such as web searches when initial results are inaccurate or ambiguous\u2014alongside a decompose-then-recompose algorithm to eliminate redundant context [3]. Other approaches, such as SELF-RAG, allow the model to dynamically determine retrieval needs on demand using self-reflection instead of relying on external models [0].",
+      "degraded": false,
+      "degraded_notes": [],
+      "elapsed_s": 19.0,
+      "faithfulness": 1.0,
+      "context_relevance": 0.2
+    },
+    {
+      "id": "V3-main-problems",
+      "category": "vague",
+      "question": "what are the main problems and how are they handled?",
+      "initial_route": "vector_store",
+      "routes": [
+        "vector_store",
+        "vector_store",
+        "vector_store"
+      ],
+      "retry_count": 2,
+      "judge_sufficient": false,
+      "n_sources": 8,
+      "source_origins": [
+        "vector_store",
+        "vector_store",
+        "vector_store",
+        "vector_store",
+        "vector_store",
+        "vector_store",
+        "vector_store",
+        "vector_store"
+      ],
+      "final_query": "CRAG and Self-RAG main problems and handling methods",
+      "answer": "Based on the provided sources, the main problems involve retrieval errors (such as inaccurate, irrelevant, or misleading results) that expose generative language models to incorrect knowledge and cause hallucinations, as well as the indiscriminate use of retrieved text containing non-essential information. To handle these issues, a corrective retrieval-augmented generation (CRAG) method uses a lightweight evaluator to assess the quality of retrieved documents and trigger specific actions like \"Correct,\" \"Incorrect,\" or \"Ambiguous.\" Additionally, web searches are integrated as an extension for sub-optimal results, and a decompose-then-recompose algorithm is applied to eliminate redundant contexts and refine key insights.",
+      "degraded": false,
+      "degraded_notes": [],
+      "elapsed_s": 14.4,
+      "faithfulness": 1.0,
+      "context_relevance": 0.5
+    }
+  ]
+}

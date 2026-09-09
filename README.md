@@ -367,7 +367,23 @@ Then exercise retrieval on its own:
 ```bash
 python -m agents.lit_search.rag.demo                 # ingest + sample queries
 python -m agents.lit_search.rag.demo --skip-ingest --query "your question" --top-k 3
+python -m agents.lit_search.rag.route_demo           # Step 10: routing + judge/reformulate trace
 ```
+
+### Evaluation (Step 11)
+
+```bash
+python -m eval.run_eval                              # both phases, writes eval/results/
+python -m eval.run_eval --only vague                 # re-score one category, merge into the report
+python -m eval.run_eval --skip-pipeline              # retriever metrics only (fast, no LLM)
+```
+
+Needs `GEMINI_API_KEY` (faithfulness + answer generation) and a built
+Chroma DB. On the Gemini free tier (15 req/min) a full run takes ~20–40
+min against 429 backoff; `--gemini-timeout` / `--gemini-max-retries`
+(defaults 120s / 8) keep a stalled call from hanging the run, and `--rpm`
+adds a client-side cap if 429s dominate. Results and interpretation land
+in `eval/results/eval_report.md`.
 
 ### Configuration
 
@@ -476,9 +492,15 @@ for hitting `synthesis`/`critic` directly) and replying to a paused task
   A2A contract, selected by `LIT_SEARCH_MODE`. `route_demo.py` is the
   acceptance script; the full committee runs end to end with no change to
   chair, synthesis, or critic.
-- **Step 11 — RAGAS evaluation: after that.** Context precision/recall
-  against the retriever alone, faithfulness against full `lit_search`
-  output, results saved under `eval/`.
+- **Step 11 — RAGAS evaluation: complete.** `eval/eval_set.py` is 15
+  sub-queries (9 `local` across all five papers, 3 `web`, 3 `vague`);
+  `eval/run_eval.py` scores the Step 9 retriever alone (RAGAS non-LLM
+  context precision/recall against gold chunks resolved from key phrases)
+  and the full Step 10 pipeline (RAGAS faithfulness + LLM context
+  relevance, per category), writing `eval/results/eval_report.{json,md}`.
+  Re-runnable; `--only <category>` merges a fresh sub-run into the report,
+  and a `degraded` flag drops rate-limit-corrupted rows from the means.
+  See [Evaluation](#evaluation-step-11) below for the headline numbers.
 
 See [`SPEC.md`](SPEC.md) for the full Step 9–11 spec.
 
@@ -525,8 +547,44 @@ For the CRAG decompose-then-recompose query, a chunk at **dense rank 18**,
 BM25 rank 1 is fused and reranked all the way to result #1. Without the
 sparse arm or the reranker those chunks don't surface.
 
-This is spot-checking on six hand-written queries, not a measured
-evaluation — quantifying it with RAGAS is Step 11.
+This is spot-checking on six hand-written queries; the measured version
+is [Evaluation](#evaluation-step-11) below.
+
+## Evaluation (Step 11)
+
+`python -m eval.run_eval` scores two layers separately and writes
+`eval/results/eval_report.{json,md}` (re-runnable; `--only local|web|vague`
+merges one category back into the report). The eval set is 15 sub-queries:
+9 `local` (answerable from one ingested paper, with gold chunks resolved
+from verbatim key phrases), 3 `web` (need current info), 3 `vague`
+(deliberately under-specified — includes "how do you make it better?").
+
+**Retriever alone** (Step 9 `HybridRetriever`, no LLM), RAGAS non-LLM
+context metrics over the 9 local queries:
+
+| metric | mean | reads as |
+|---|---|---|
+| context precision (vs gold chunks) | 0.62 | of the top-5, how many are a gold chunk |
+| context recall (vs gold chunks) | 0.36 | of the gold chunks, how many surfaced — strict: gold is the *specific* answer passage |
+| corpus precision (right paper) | 0.96 | routing to the correct paper is near-perfect even where the exact passage is missed |
+
+**Full pipeline** (Step 10: router → sources → merge → judge/reformulate),
+RAGAS faithfulness + LLM context relevance, by category:
+
+| category | n | faithfulness | context_relevance | mean retries | judge-sufficient |
+|---|---|---|---|---|---|
+| local | 9 | 1.00 | 0.78 | 0.7 | 0.89 |
+| web | 3 | 0.78 | 0.92 | 1.3 | 0.33 |
+| vague | 3 | 1.00 | 0.46 | 2.0 | 0.67 |
+
+Headline: **faithfulness does not distinguish a bad run** — it stays ~1.0
+for `vague` because the answer step faithfully summarises whatever came
+back, even when that evidence is off-topic (one `vague` run answered
+"how do you make it better?" entirely about *cookie consent banners*).
+What flags it is `context_relevance` (vague 0.46 vs local 0.78; worst
+single query 0.20), the judge burning its full retry budget (`retries`
+2.0), and never reaching `sufficient`. That's the case for tightening the
+reformulation prompt in a later pass.
 
 ## Current limitations / known TODOs
 
@@ -534,11 +592,13 @@ Stated plainly, since this is meant to be read, not buried:
 
 ### Agentic RAG layer (this fork)
 
-- **Not wired into the live agent yet.** `agents/lit_search/rag/` is
-  reachable only via `demo.py`. `lit_search`'s A2A responses still come
-  purely from web search. Connecting the two is Step 10, and until then
-  the retrieval quality above has no effect on what the committee
-  actually answers.
+- **Reformulation of a contextless sub-query drifts.** For a `vague`
+  sub-query the judge/reformulate loop (Step 10) spends its whole retry
+  budget and often settles on off-topic sources — measured in
+  [Evaluation](#evaluation-step-11) as low `context_relevance` with high
+  retry counts. The reformulation prompt should detect an
+  unanswerable/contextless query instead of inventing specificity; not
+  yet done.
 - **Small, older local models.** `all-MiniLM-L6-v2` (embeddings) and
   `ms-marco-MiniLM-L-6-v2` (reranker) are chosen for "runs on a laptop
   CPU with no key", not for being state of the art. The embedding model
@@ -557,8 +617,9 @@ Stated plainly, since this is meant to be read, not buried:
   there is no incremental ingest — adding a document means a full
   re-embed and rebuild.
 - **RRF weights, `k = 60`, the candidate-pool size, and the rerank cutoff
-  are defaults, not tuned** — Step 11's evaluation is what's supposed to
-  tune them.
+  are defaults, not tuned.** Step 11's evaluation exists to tune them
+  (`context_recall` / `corpus_precision` are the levers); no tuning pass
+  has been run yet.
 
 ### Base project (unchanged, carried over from `research-committee-A2A`)
 

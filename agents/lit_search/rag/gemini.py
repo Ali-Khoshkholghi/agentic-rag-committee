@@ -38,10 +38,45 @@ def resolve_model(model: str | None = None) -> str:
     return model or os.environ.get("GEMINI_MODEL") or DEFAULT_GEMINI_MODEL
 
 
+# One process-wide client-side limiter, shared by every ChatGoogleGenerativeAI
+# built here so the *combined* call rate (router + judge + reformulate, plus
+# whatever the caller layers on top) stays under a quota. Off unless
+# GEMINI_REQUESTS_PER_MINUTE is set — the live agents never set it; the Step 11
+# eval does, because it fans out enough calls to trip the Gemini free tier
+# (15 req/min) and spend the run in 429 backoff.
+_RATE_LIMITER = None
+_RATE_LIMITER_RPM: float | None = None
+
+
+def _shared_rate_limiter():
+    global _RATE_LIMITER, _RATE_LIMITER_RPM
+
+    raw = os.environ.get("GEMINI_REQUESTS_PER_MINUTE", "").strip()
+    try:
+        rpm = float(raw) if raw else 0.0
+    except ValueError:
+        rpm = 0.0
+    if rpm <= 0:
+        return None
+
+    if _RATE_LIMITER is None or _RATE_LIMITER_RPM != rpm:
+        from langchain_core.rate_limiters import InMemoryRateLimiter
+
+        _RATE_LIMITER = InMemoryRateLimiter(
+            requests_per_second=rpm / 60.0,
+            check_every_n_seconds=0.5,
+            max_bucket_size=max(1, int(rpm // 6)),  # small burst allowance
+        )
+        _RATE_LIMITER_RPM = rpm
+    return _RATE_LIMITER
+
+
 def build_chat_model(api_key: str | None = None, model: str | None = None):
     """Builds a ``ChatGoogleGenerativeAI`` — mirrors LangGraphVerifier.__init__.
 
-    Raises GeminiConfigError if no key is available (env or argument).
+    Raises GeminiConfigError if no key is available (env or argument). If
+    ``GEMINI_REQUESTS_PER_MINUTE`` is set, every model built here shares one
+    client-side rate limiter (see ``_shared_rate_limiter``).
     """
     from langchain_google_genai import ChatGoogleGenerativeAI
 
@@ -52,7 +87,21 @@ def build_chat_model(api_key: str | None = None, model: str | None = None):
             "critic use). Set it, or set LIT_SEARCH_MODE=provider to keep the "
             "Tavily-only flow."
         )
-    return ChatGoogleGenerativeAI(model=resolve_model(model), google_api_key=key)
+    kwargs: dict = {"model": resolve_model(model), "google_api_key": key}
+    limiter = _shared_rate_limiter()
+    if limiter is not None:
+        kwargs["rate_limiter"] = limiter
+    # Opt-in hardening for batch use (the Step 11 eval): a per-request
+    # timeout so a stalled socket fails and retries instead of hanging the
+    # run forever, and extra retries to ride out free-tier 429 bursts. The
+    # live agents leave these unset and keep the library defaults.
+    timeout = os.environ.get("GEMINI_TIMEOUT", "").strip()
+    if timeout:
+        kwargs["timeout"] = float(timeout)
+    retries = os.environ.get("GEMINI_MAX_RETRIES", "").strip()
+    if retries.isdigit():
+        kwargs["max_retries"] = int(retries)
+    return ChatGoogleGenerativeAI(**kwargs)
 
 
 def extract_text(content: Any) -> str:
