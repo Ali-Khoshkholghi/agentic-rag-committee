@@ -61,26 +61,33 @@ Streams candidate sources one at a time — a separate
 not one batch dump — so a caller sees results arrive incrementally
 regardless of how the underlying search actually behaves.
 
-Search itself sits behind a swappable `SearchProvider` adapter
-(`agents/lit_search/search_provider.py`): `FakeSearchProvider` (default,
-deterministic, no API key) or `TavilySearchProvider` (real web search).
-The executor's streaming/task logic doesn't know or care which one is
-behind it — the A2A contract never depends on the search API.
+Evidence-gathering sits behind a swappable `SearchProvider` adapter. The
+executor's streaming/task logic doesn't know or care which one is behind
+it — the A2A contract (sub-query in as text, `{title, url, snippet}`
+dicts streamed back) never depends on it. `LIT_SEARCH_MODE` picks:
 
-**New in this fork:** a standalone local-retrieval stack under
-`agents/lit_search/rag/` (see the next section). It is fully independent
-of the A2A executor for now — `agent_executor.py` still calls only the
-`SearchProvider` — so `lit_search`'s external behaviour is exactly the
-upstream project's until Step 10 wires the two together.
+- **`provider`** — `agents/lit_search/search_provider.py`:
+  `FakeSearchProvider` (deterministic, no API key) or
+  `TavilySearchProvider` (real web search), per `LIT_SEARCH_PROVIDER`.
+  The upstream project's behaviour, unchanged.
+- **`agentic`** (default when `GEMINI_API_KEY` is set; **new in this
+  fork**, Step 10) — `agents/lit_search/agentic_search.py` wraps the
+  `agents/lit_search/rag/` pipeline: a per-sub-query router chooses the
+  vector store, web search, or both; a LangGraph judge scores the merged
+  evidence and reformulates-and-retries when it's weak. `LIT_SEARCH_PROVIDER`
+  still selects that pipeline's web arm.
 
 ### Agentic RAG in `lit_search` (`agents/lit_search/rag/`)
 
-A standalone local-retrieval stack: a corpus of documents in
-`agents/lit_search/data/corpus/` turned into an index that hybrid-searches
-better than either dense or keyword search alone. It reads no environment
-variables and needs no API key — the embedding and rerank models run
-locally on CPU (downloaded once from the Hugging Face hub on first use).
-Three small modules:
+A corpus of documents in `agents/lit_search/data/corpus/` turned into an
+index that hybrid-searches better than either dense or keyword search
+alone, plus (Step 10) a Gemini-driven router and self-correction loop on
+top. The Step 9 retrieval core (`ingest.py`, `retriever.py`, `demo.py`)
+reads no environment variables and needs no API key — the embedding and
+rerank models run locally on CPU (downloaded once from the Hugging Face
+hub on first use). The Step 10 modules (`router.py`, `judge.py`,
+`pipeline.py`) add the LLM steps and share `GEMINI_API_KEY` / `GEMINI_MODEL`
+with synthesis and critic.
 
 - **`ingest.py`** — reads every `.pdf`, `.md` / `.markdown`, or `.txt`
   file in the corpus directory (PDF text extracted with **`pypdf`**), and
@@ -108,6 +115,28 @@ Three small modules:
   run a set of sample queries through `HybridRetriever` and print the
   ranked/reranked chunks with their source metadata and scores. Not
   imported anywhere; it only exercises the two modules above.
+
+- **`router.py`** (Step 10) — `SourceRouter`: one Gemini call per
+  sub-query, given the sub-query plus a short description of each source
+  (local corpus vs. Tavily web), returning `vector_store`, `web`, or
+  `both`. Falls back to `both` if the response can't be parsed or the
+  call fails — a wrong route only costs extra retrieval, never a crash.
+
+- **`judge.py`** (Step 10) — a two-node LangGraph graph, same
+  construction critic uses: a `judge` node scores the merged evidence
+  against the sub-query for sufficiency, and a `reformulate_and_retrieve`
+  node builds a sharper query from the judge's reasoning and re-runs
+  retrieval (router → sources → merge), incrementing `retry_count`.
+  Conditional edge out of `judge`: sufficient → END; insufficient with
+  retries left → reformulate; retries exhausted (`max=2`) → END with the
+  best-effort merged evidence.
+
+- **`pipeline.py`** (Step 10) — `AgenticRetrievalPipeline` wires router +
+  `HybridRetriever` + the web `SearchProvider` + the judge graph into one
+  `gather(sub_query)` call. `route_demo.py` is its standalone acceptance
+  script: `python -m agents.lit_search.rag.route_demo` prints the routing
+  decision, every judge pass, and every reformulate/retry cycle for a
+  local / web / vague query set.
 
 The corpus today is five arXiv papers on retrieval and
 retrieval-augmented generation — REALM, DPR, RAG, Self-RAG, and CRAG. Drop
@@ -351,6 +380,7 @@ cp .env.example .env
 ```
 TAVILY_API_KEY=
 LIT_SEARCH_PROVIDER=tavily
+LIT_SEARCH_MODE=agentic
 
 GEMINI_API_KEY=
 SYNTHESIS_PROVIDER=adk
@@ -359,8 +389,15 @@ SYNTHESIS_PROVIDER=adk
 CRITIC_MODE=langgraph
 ```
 
+- `LIT_SEARCH_MODE` — `provider` (Step 5 web search only) or `agentic`
+  (Step 10 router + vector store / web / both + judge/reformulate loop).
+  If left unset, defaults to `agentic` when `GEMINI_API_KEY` is set,
+  otherwise `provider` — same zero-key-required principle as `CRITIC_MODE`.
+  `agentic` fails loudly at startup if `GEMINI_API_KEY` is missing.
+  `LIT_SEARCH_MAX_RETRIES` (default 2) caps the judge's retry cycles.
 - `LIT_SEARCH_PROVIDER` — `fake` (default if unset) or `tavily`. `fake`
-  needs no key and is safe for repeated `debug_client.py` runs.
+  needs no key and is safe for repeated `debug_client.py` runs. In
+  `agentic` mode this selects the pipeline's web arm.
 - `TAVILY_API_KEY` — only required when `LIT_SEARCH_PROVIDER=tavily`. If
   it's missing in that case, `lit_search` fails loudly at startup instead
   of on the first search.
@@ -430,12 +467,15 @@ for hitting `synthesis`/`critic` directly) and replying to a paused task
   `retriever.py` exist and work standalone; `demo.py` is the acceptance
   check. `lit_search`'s A2A behaviour is untouched — the whole committee
   still runs end to end exactly as in the base project.
-- **Step 10 — routing + self-correction: next.** A single-LLM `router`
-  that decides per sub-query whether to hit the vector store, web search,
-  or both; a two-node LangGraph `judge` / `reformulate_and_retrieve` loop
-  that scores merged evidence for sufficiency and retries with a
-  reformulated query when it's weak; and the wiring of both into
-  `agents/lit_search/agent_executor.py` behind the same A2A contract.
+- **Step 10 — routing + self-correction: complete.** `router.py`
+  decides per sub-query whether to hit the vector store, web search, or
+  both; the two-node LangGraph `judge` / `reformulate_and_retrieve` loop
+  in `judge.py` scores merged evidence for sufficiency and retries with a
+  reformulated query (max 2) when it's weak; `pipeline.py` +
+  `agentic_search.py` wire both into `lit_search` behind the unchanged
+  A2A contract, selected by `LIT_SEARCH_MODE`. `route_demo.py` is the
+  acceptance script; the full committee runs end to end with no change to
+  chair, synthesis, or critic.
 - **Step 11 — RAGAS evaluation: after that.** Context precision/recall
   against the retriever alone, faithfulness against full `lit_search`
   output, results saved under `eval/`.
