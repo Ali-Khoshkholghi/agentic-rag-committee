@@ -20,8 +20,9 @@ agent**.
 and `lit_search`'s original Tavily-only search behaviour are byte-for-byte
 what they are upstream — same Agent Cards, same skills, same ports, same
 streamed-chunk semantics, same `.env` toggles. Only `lit_search` gained
-new *internals* (`agents/lit_search/rag/`), and as of Step 9 they are not
-yet wired into the live request path — see **Current status** below.
+new *internals* (`agents/lit_search/rag/`): Step 9 built them standalone,
+and Step 10 wired them into the live request path behind `LIT_SEARCH_MODE`
+— see **Current status** below.
 
 A human asks a research question. Four independent agents collaborate over
 A2A to answer it: `lit_search` finds sources, `synthesis` drafts an answer,
@@ -93,7 +94,7 @@ with synthesis and critic.
   file in the corpus directory (PDF text extracted with **`pypdf`**), and
   splits each document with a structure-aware **recursive splitter** —
   heading → paragraph → line → sentence → word — into **~500-token
-  windows with ~50-token verbatim overlap**. Each chunk is embedded with
+  windows with ~100-token verbatim overlap**. Each chunk is embedded with
   `sentence-transformers` **`all-MiniLM-L6-v2`** (384-dim; its native
   256-token input limit raised to 512 so a full chunk embeds without
   truncation), and chunks + embeddings + per-chunk source metadata
@@ -105,7 +106,7 @@ with synthesis and critic.
   *same* stored chunks: **dense** cosine search against Chroma, and
   **sparse** BM25 (**`rank_bm25`**) built in memory from those exact chunk
   texts. The two rank lists are merged with **Reciprocal Rank Fusion**
-  (`k = 60`), and the fused candidate pool (default 20) is **reranked with
+  (`k = 60`), and the fused candidate pool (default 40) is **reranked with
   a cross-encoder** (`cross-encoder/ms-marco-MiniLM-L-6-v2`) down to
   top-k (default 5). Each result carries its text, source/title/chunk
   index, and every intermediate signal — dense rank, sparse rank, RRF
@@ -125,11 +126,18 @@ with synthesis and critic.
 - **`judge.py`** (Step 10) — a two-node LangGraph graph, same
   construction critic uses: a `judge` node scores the merged evidence
   against the sub-query for sufficiency, and a `reformulate_and_retrieve`
-  node builds a sharper query from the judge's reasoning and re-runs
-  retrieval (router → sources → merge), incrementing `retry_count`.
-  Conditional edge out of `judge`: sufficient → END; insufficient with
-  retries left → reformulate; retries exhausted (`max=2`) → END with the
-  best-effort merged evidence.
+  node builds a sharper query — grounded in the committee's actual
+  research domain (RAG / Self-RAG / CRAG / REALM / DPR) so it stays on
+  topic instead of inventing a plausible-but-unrelated one — from the
+  judge's reasoning and re-runs retrieval (router → sources → merge),
+  incrementing `retry_count`. If the sub-query has no groundable topic at
+  all (no salient noun, a pronoun with no antecedent), reformulate exits
+  as `unreformulable` instead of spending a retry on a tangent.
+  Conditional edges: out of `judge`, sufficient → END, insufficient with
+  retries left → reformulate, retries exhausted (`max=2`) → END with the
+  best-effort merged evidence; out of `reformulate_and_retrieve`,
+  `unreformulable` → END directly, otherwise back to `judge` with the
+  freshly retrieved evidence.
 
 - **`pipeline.py`** (Step 10) — `AgenticRetrievalPipeline` wires router +
   `HybridRetriever` + the web `SearchProvider` + the judge graph into one
@@ -381,9 +389,17 @@ python -m eval.run_eval --skip-pipeline              # retriever metrics only (f
 Needs `GEMINI_API_KEY` (faithfulness + answer generation) and a built
 Chroma DB. On the Gemini free tier (15 req/min) a full run takes ~20–40
 min against 429 backoff; `--gemini-timeout` / `--gemini-max-retries`
-(defaults 120s / 8) keep a stalled call from hanging the run, and `--rpm`
-adds a client-side cap if 429s dominate. Results and interpretation land
-in `eval/results/eval_report.md`.
+(defaults 120s / 8, overriding the live agents' own smaller defaults —
+see below) keep a stalled call from hanging the run, and `--rpm` adds a
+client-side cap if 429s dominate. Results and interpretation land in
+`eval/results/eval_report.md`.
+
+Every Gemini call in `agents/lit_search/rag/` — router, judge, reformulate
+— goes through `gemini.py`'s `build_chat_model()`, which applies a 30s
+timeout / 2 retries by default so a stalled socket during a live demo
+fails into the existing `GeminiError` fallback instead of hanging (the
+same `GEMINI_TIMEOUT` / `GEMINI_MAX_RETRIES` env vars override this too,
+for either the live agents or the eval).
 
 ### Configuration
 
@@ -509,15 +525,16 @@ See [`SPEC.md`](SPEC.md) for the full Step 9–11 spec.
 `demo.py`, run against the five-paper corpus above — chosen because they
 overlap heavily in vocabulary: two describe an evaluate-then-act RAG loop
 (Self-RAG, CRAG), two describe a dense retriever feeding a reader (REALM,
-DPR). Ingest produces 198 chunks:
+DPR). Ingest produces 225 chunks (at the current 100-token chunk overlap —
+see the `ingest.py` bullet above):
 
 | File | Paper | Chunks |
 |---|---|---|
-| `2002.08909v1.pdf` | REALM: Retrieval-Augmented LM Pre-Training | 31 |
-| `2004.04906v3.pdf` | DPR: Dense Passage Retrieval for Open-Domain QA | 32 |
-| `2005.11401v4.pdf` | RAG for Knowledge-Intensive NLP Tasks | 42 |
-| `2310.11511v1.pdf` | Self-RAG | 60 |
-| `2401.15884v3.pdf` | CRAG: Corrective RAG | 33 |
+| `2002.08909v1.pdf` | REALM: Retrieval-Augmented LM Pre-Training | 35 |
+| `2004.04906v3.pdf` | DPR: Dense Passage Retrieval for Open-Domain QA | 36 |
+| `2005.11401v4.pdf` | RAG for Knowledge-Intensive NLP Tasks | 47 |
+| `2310.11511v1.pdf` | Self-RAG | 70 |
+| `2401.15884v3.pdf` | CRAG: Corrective RAG | 37 |
 
 Six test queries — five targeting a mechanism that belongs to exactly one
 paper, one deliberately ambiguous:
@@ -536,16 +553,14 @@ on the ambiguous one (DPR and RAG both legitimately own it; no false
 confidence forcing a single winner).
 
 The hybrid pipeline is doing real work, not just running — visible in the
-per-result ranks. For the Self-RAG token query:
+per-result ranks. For the Self-RAG token query, a chunk at **dense rank
+14**, BM25 rank 1 (BM25 caught the literal token `ISREL` that the
+embedding buried) is fused and reranked to result #4.
 
-- a chunk at **dense rank 12**, BM25 rank 1 (BM25 caught the literal token
-  `ISREL` that the embedding buried) is reranked to result #3;
-- a chunk **absent from the dense top-20 entirely**, BM25 rank 4, is
-  reranked to result #5.
-
-For the CRAG decompose-then-recompose query, a chunk at **dense rank 18**,
-BM25 rank 1 is fused and reranked all the way to result #1. Without the
-sparse arm or the reranker those chunks don't surface.
+For the CRAG decompose-then-recompose query, a chunk at **dense rank 22**
+— outside a dense-only top-20 — BM25 rank 1 is fused and reranked all the
+way to result #3. Without the sparse arm or the reranker those chunks
+don't surface.
 
 This is spot-checking on six hand-written queries; the measured version
 is [Evaluation](#evaluation-step-11) below.
@@ -639,10 +654,12 @@ Stated plainly, since this is meant to be read, not buried:
   rebuilt in memory from the full collection on every retriever startup;
   there is no incremental ingest — adding a document means a full
   re-embed and rebuild.
-- **RRF weights, `k = 60`, the candidate-pool size, and the rerank cutoff
-  are defaults, not tuned.** Step 11's evaluation exists to tune them
-  (`context_recall` / `corpus_precision` are the levers); no tuning pass
-  has been run yet.
+- **RRF's `k = 60` and the top-k rerank cutoff (5) are still untuned
+  defaults.** Step 11's evaluation did drive one real tuning pass on the
+  other two levers — candidate-pool size (20 → 40) and chunk overlap
+  (50 → 100 tokens) — using `context_recall` / `corpus_precision` as the
+  signal (see [Evaluation](#evaluation-step-11)); `k` and the final
+  rerank cutoff haven't been touched.
 
 ### Base project (unchanged, carried over from `research-committee-A2A`)
 
