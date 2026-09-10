@@ -30,10 +30,18 @@ import types
 
 
 def _install_lzma_shim() -> None:
+    # sys.modules check MUST come first: once _lzma is already a spec-less
+    # stub in sys.modules (installed here, or by
+    # agents/lit_search/rag/_lzma_shim.py's copy of this same fix),
+    # find_spec("_lzma") stops searching the filesystem and instead reads
+    # that stub's __spec__ — which is None — and raises ValueError instead
+    # of returning None. Calling find_spec first broke exactly the
+    # run_eval.py -> agents.lit_search.rag.pipeline import chain this
+    # module exists to unblock.
+    if "_lzma" in sys.modules:
+        return  # already stubbed (by us, or by the rag package's copy)
     if importlib.util.find_spec("_lzma") is not None:
         return  # real extension present — nothing to do
-    if "_lzma" in sys.modules:
-        return
 
     mod = types.ModuleType("_lzma")
 

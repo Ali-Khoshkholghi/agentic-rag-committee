@@ -27,10 +27,19 @@ import types
 
 
 def install() -> None:
+    # Check sys.modules FIRST: once anything (including this function, or
+    # eval/_ragas_compat.py's copy of it) has stashed a spec-less stub at
+    # sys.modules["_lzma"], find_spec("_lzma") no longer searches the
+    # filesystem — it reads that module's __spec__ and raises ValueError
+    # because it's None, instead of returning None itself. Calling
+    # find_spec first (as an earlier revision of this function did) broke
+    # exactly the case this function exists to support: eval/run_eval.py
+    # importing eval/_ragas_compat.py (which installs its own copy of this
+    # stub) before it imports anything under agents.lit_search.rag.
+    if "_lzma" in sys.modules:
+        return  # already stubbed (e.g. by eval/_ragas_compat.py), or real
     if importlib.util.find_spec("_lzma") is not None:
         return  # real extension present — nothing to do
-    if "_lzma" in sys.modules:
-        return  # already stubbed (e.g. by eval/_ragas_compat.py)
 
     mod = types.ModuleType("_lzma")
 

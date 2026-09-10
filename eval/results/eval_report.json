@@ -1,7 +1,7 @@
 {
   "config": {
-    "generated_at": "2026-09-10T09:36:48+00:00",
-    "git_sha": "36b9c85",
+    "generated_at": "2026-09-10T10:27:28+00:00",
+    "git_sha": "c39d21d",
     "gemini_model": "gemini-flash-lite-latest",
     "top_k": 5,
     "max_retries": 2,
@@ -9,7 +9,7 @@
     "gemini_timeout_s": 120.0,
     "gemini_max_retries": 8,
     "only": null,
-    "merged": false,
+    "merged": true,
     "eval_set_size": 15
   },
   "aggregates": {
