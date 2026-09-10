@@ -592,13 +592,19 @@ Stated plainly, since this is meant to be read, not buried:
 
 ### Agentic RAG layer (this fork)
 
-- **Reformulation of a contextless sub-query drifts.** For a `vague`
-  sub-query the judge/reformulate loop (Step 10) spends its whole retry
-  budget and often settles on off-topic sources — measured in
-  [Evaluation](#evaluation-step-11) as low `context_relevance` with high
-  retry counts. The reformulation prompt should detect an
-  unanswerable/contextless query instead of inventing specificity; not
-  yet done.
+- **The reformulate step is domain-grounded and detects an unanswerable
+  query — but only on retry, not on the router's first pass.** The
+  judge/reformulate loop now grounds a retry query in the committee's
+  actual research domain (RAG / Self-RAG / CRAG / REALM / DPR) and exits
+  as `unreformulable` instead of inventing specificity and drifting to an
+  off-topic reformulated query (the earlier "cookie consent banners" case
+  in an older revision of this README). That grounding applies only to
+  the *retry* query, though — the router's *initial* search still uses
+  the raw sub-query verbatim. A genuinely vague, ungrounded question
+  (e.g. "how do you make it better?") can still route to `web` on the
+  first pass and return generic non-RAG content from a real search
+  engine, even though the retry path then correctly stops rather than
+  drifting further.
 - **Small, older local models.** `all-MiniLM-L6-v2` (embeddings) and
   `ms-marco-MiniLM-L-6-v2` (reranker) are chosen for "runs on a laptop
   CPU with no key", not for being state of the art. The embedding model

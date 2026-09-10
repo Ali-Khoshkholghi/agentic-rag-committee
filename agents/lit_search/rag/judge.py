@@ -8,6 +8,15 @@ query and retrieves again, up to ``max_retries`` times:
       ▲     └─insufficient, retries exhausted─────► END  (best-effort)
       │
       └────────── reformulate_and_retrieve ◄──insufficient, retries left
+                        │
+                        └─sub-query unreformulable in-domain──► END
+
+The reformulate step is grounded in the committee's actual research
+domain (RAG / Self-RAG / CRAG / REALM / DPR) so a vague sub-query
+reformulates within it instead of drifting to a plausible-sounding but
+unrelated topic. If it can't be grounded at all (no salient noun, a
+pronoun with no antecedent), it exits straight to END rather than
+inventing specificity and spending a retry on a tangent.
 
 Same LangGraph + Gemini construction critic uses in
 ``agents/critic/langgraph_verifier.py``: a ``StateGraph`` over a
@@ -38,8 +47,20 @@ RetrieveFn = Callable[[str], Awaitable[tuple[RouteDecision, list[dict[str, Any]]
 _SUFFICIENT_RE = re.compile(r"sufficient\s*:\s*(yes|no)", re.IGNORECASE)
 _REASON_RE = re.compile(r"reason\s*:\s*(.+)", re.IGNORECASE | re.DOTALL)
 _QUERY_RE = re.compile(r"query\s*:\s*(.+)", re.IGNORECASE)
+_UNREFORMULABLE_RE = re.compile(r"unreformulable\s*:\s*(.+)", re.IGNORECASE | re.DOTALL)
 
 _EVIDENCE_CAP = 8
+
+# Grounds the reformulation LLM in the committee's actual subject matter so
+# a vague sub-query (e.g. "how do you make it better?") reformulates within
+# this domain instead of drifting to a plausible-sounding but unrelated
+# topic (observed: "cookie consent banners").
+_DOMAIN_DESCRIPTION = (
+    "This research committee studies retrieval-augmented generation (RAG) "
+    "methods for NLP — topics such as RAG, Self-RAG, CRAG, REALM, DPR "
+    "(dense passage retrieval), and closely related retrieval/generation "
+    "architectures and evaluation techniques."
+)
 
 
 class JudgeState(TypedDict):
@@ -92,14 +113,27 @@ def _build_judge_prompt(sub_query: str, evidence: list[dict[str, Any]]) -> str:
 def _build_reformulate_prompt(sub_query: str, reasoning: str) -> str:
     return (
         "A retrieval attempt for the sub-query below returned evidence that "
-        "was judged insufficient. Using the judge's reasoning, write ONE "
-        "improved search query that is more specific and more likely to "
-        "retrieve a direct answer. Keep it concise (a search query, not a "
-        "sentence).\n\n"
+        "was judged insufficient.\n\n"
+        f"{_DOMAIN_DESCRIPTION}\n\n"
+        "First check whether the sub-query has a salient, groundable topic "
+        "within or adjacent to that domain — a named method, paper, "
+        "mechanism, or a pronoun/ellipsis ('it', 'the retriever part', "
+        "'better') with a clear antecedent recoverable from the judge's "
+        "reasoning below. If it does NOT — no salient noun, a pronoun with "
+        "no antecedent, or a question so open-ended it could be about "
+        "anything — do NOT invent specificity or drift to an unrelated "
+        "topic just to produce a plausible-looking query. Respond that it "
+        "is unreformulable instead.\n\n"
+        "If it DOES have a groundable topic, write ONE improved search "
+        "query that is more specific, more likely to retrieve a direct "
+        "answer, and stays within or adjacent to the domain above. Keep it "
+        "concise (a search query, not a sentence).\n\n"
         f"Original sub-query: {sub_query}\n"
         f"Why the evidence was insufficient: {reasoning}\n\n"
-        "Respond with EXACTLY one line, no other text:\n"
-        "Query: the improved search query"
+        "Respond with EXACTLY one line, no other text, in ONE of these two "
+        "forms:\n"
+        "Query: the improved search query\n"
+        "Unreformulable: one short sentence saying what's missing"
     )
 
 
@@ -128,6 +162,21 @@ def _parse_query(text: str, fallback: str) -> str:
         if line.strip():
             return line.strip().strip('"')
     return fallback
+
+
+def _parse_reformulation(text: str, fallback: str) -> tuple[str | None, str | None]:
+    """Parse the reformulate LLM's response.
+
+    Returns ``(query, None)`` when a reformulated query was produced, or
+    ``(None, reason)`` when the LLM judged the sub-query unreformulable
+    within the committee's domain — checked first so it wins over any
+    stray "Query:"-shaped text in the same response.
+    """
+    unreform_match = _UNREFORMULABLE_RE.search(text)
+    if unreform_match:
+        reason = unreform_match.group(1).strip().splitlines()[0].strip()
+        return None, reason or "sub-query has no groundable topic in this domain"
+    return _parse_query(text, fallback=fallback), None
 
 
 def merge_evidence(
@@ -210,12 +259,39 @@ def _make_reformulate_node(llm, retrieve_fn: RetrieveFn):
     async def reformulate_and_retrieve(state: JudgeState) -> dict[str, Any]:
         sub_query = state["sub_query"]
         prompt = _build_reformulate_prompt(sub_query, state["reasoning"])
+        unreformulable_reason: str | None = None
         try:
             text = await ainvoke_text(llm, prompt)
-            new_query = _parse_query(text, fallback=sub_query)
+            new_query, unreformulable_reason = _parse_reformulation(text, fallback=sub_query)
         except GeminiError as exc:
+            # A dead reformulate call isn't evidence the query is vague —
+            # fall back to retrying the original sub-query, as before.
             logger.warning("judge: reformulate call failed (%s) — reusing original sub-query", exc)
             new_query = sub_query
+
+        if unreformulable_reason is not None:
+            logger.info(
+                "judge: retry %d/%d — sub-query %r judged unreformulable in-domain "
+                "(%s) — stopping instead of spending the retry on a tangent",
+                state["retry_count"] + 1,
+                state["max_retries"],
+                sub_query,
+                unreformulable_reason,
+            )
+            history_note = {
+                "attempt": state["retry_count"] + 1,
+                "reformulated_query": None,
+                "route": "(skipped — unreformulable)",
+                "route_reason": "",
+                "fresh_count": 0,
+                "merged_count": len(state["evidence"]),
+            }
+            return {
+                "retry_count": state["retry_count"] + 1,
+                "sufficient": False,
+                "reasoning": f"unreformulable: {unreformulable_reason}",
+                "history": state["history"] + [history_note],
+            }
 
         logger.info(
             "judge: retry %d/%d — reformulated %r -> %r",
@@ -258,6 +334,15 @@ def _decide_after_judge(state: JudgeState) -> str:
     return "reformulate_and_retrieve"
 
 
+def _decide_after_reformulate(state: JudgeState) -> str:
+    # The reformulate node routes straight to END on an "unreformulable"
+    # verdict (flagged via the reasoning prefix) instead of looping back
+    # through judge to burn a second retry on the same unresolved query.
+    if state["reasoning"].startswith("unreformulable:"):
+        return END
+    return "judge"
+
+
 def _build_graph(llm, retrieve_fn: RetrieveFn):
     graph = StateGraph(JudgeState)
     graph.add_node("judge", _make_judge_node(llm))
@@ -269,7 +354,11 @@ def _build_graph(llm, retrieve_fn: RetrieveFn):
         _decide_after_judge,
         {END: END, "reformulate_and_retrieve": "reformulate_and_retrieve"},
     )
-    graph.add_edge("reformulate_and_retrieve", "judge")
+    graph.add_conditional_edges(
+        "reformulate_and_retrieve",
+        _decide_after_reformulate,
+        {END: END, "judge": "judge"},
+    )
     return graph.compile()
 
 

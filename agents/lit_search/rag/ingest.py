@@ -11,8 +11,11 @@ Run directly to (re)build the DB::
 
     python -m agents.lit_search.rag.ingest
 
-This module is standalone — it is not imported by lit_search's A2A
-executor. Wiring retrieval into the agent is Step 10.
+``retriever.py`` imports this module's ``load_embedder`` / path constants,
+and is itself wired into the live A2A agent via ``pipeline.py`` (Step 10)
+— so importing this module also installs the ``_lzma`` shim (see
+``_lzma_shim.py``) for that whole chain, not just for a standalone
+``ingest`` run.
 """
 
 from __future__ import annotations
@@ -23,6 +26,13 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable
+
+from . import _lzma_shim
+
+# Must run before the first ``sentence_transformers`` import anywhere in
+# the rag package (below, and in retriever.py via ``load_embedder``) —
+# see _lzma_shim.py for why. Cheap when the real extension is present.
+_lzma_shim.install()
 
 # --- Locations -------------------------------------------------------------
 
@@ -43,7 +53,7 @@ EMBED_MODEL_NAME = "all-MiniLM-L6-v2"
 EMBED_MAX_SEQ_TOKENS = 512
 
 CHUNK_TOKENS = 500
-CHUNK_OVERLAP_TOKENS = 50
+CHUNK_OVERLAP_TOKENS = 100
 
 # Tried in order. Heading separators first so a section stays with its
 # heading; then paragraph, line, sentence, word, and finally character.

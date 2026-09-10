@@ -19,6 +19,18 @@ from typing import Any
 # gemini-flash-lite-latest, which all three agents already share).
 DEFAULT_GEMINI_MODEL = "gemini-3.6-flash"
 
+# Always-on floor for every live call (router, judge, reformulate) so a
+# stalled socket during a demo fails and falls back within seconds rather
+# than hanging indefinitely — the Step 11 eval once sat 45 minutes on one
+# stuck connection with no timeout set at all. Deliberately tighter than
+# the eval's own GEMINI_TIMEOUT=120 / GEMINI_MAX_RETRIES=8 (batch runs can
+# afford to ride out free-tier 429 backoff; an interactive A2A request
+# should fail fast into router/judge's existing GeminiError fallback
+# instead). GEMINI_TIMEOUT / GEMINI_MAX_RETRIES still override both, for
+# the eval or anyone who wants different numbers.
+DEFAULT_GEMINI_TIMEOUT_S = 30.0
+DEFAULT_GEMINI_MAX_RETRIES = 2
+
 
 class GeminiConfigError(RuntimeError):
     """Raised at startup when agentic retrieval is selected but
@@ -91,16 +103,14 @@ def build_chat_model(api_key: str | None = None, model: str | None = None):
     limiter = _shared_rate_limiter()
     if limiter is not None:
         kwargs["rate_limiter"] = limiter
-    # Opt-in hardening for batch use (the Step 11 eval): a per-request
-    # timeout so a stalled socket fails and retries instead of hanging the
-    # run forever, and extra retries to ride out free-tier 429 bursts. The
-    # live agents leave these unset and keep the library defaults.
+    # A per-request timeout so a stalled socket fails and falls back
+    # instead of hanging (live default: DEFAULT_GEMINI_TIMEOUT_S; the
+    # eval overrides via GEMINI_TIMEOUT for its more tolerant batch runs),
+    # plus a retry budget to ride out transient errors / 429 bursts.
     timeout = os.environ.get("GEMINI_TIMEOUT", "").strip()
-    if timeout:
-        kwargs["timeout"] = float(timeout)
+    kwargs["timeout"] = float(timeout) if timeout else DEFAULT_GEMINI_TIMEOUT_S
     retries = os.environ.get("GEMINI_MAX_RETRIES", "").strip()
-    if retries.isdigit():
-        kwargs["max_retries"] = int(retries)
+    kwargs["max_retries"] = int(retries) if retries.isdigit() else DEFAULT_GEMINI_MAX_RETRIES
     return ChatGoogleGenerativeAI(**kwargs)
 
 

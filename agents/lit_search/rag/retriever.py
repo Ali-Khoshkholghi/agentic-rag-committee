@@ -27,7 +27,7 @@ from .ingest import CHROMA_DIR, COLLECTION_NAME, load_embedder
 RERANK_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 RRF_K = 60
 DEFAULT_TOP_K = 5
-DEFAULT_CANDIDATE_POOL = 20
+DEFAULT_CANDIDATE_POOL = 40
 
 _WORD_RE = re.compile(r"[a-z0-9]+")
 
