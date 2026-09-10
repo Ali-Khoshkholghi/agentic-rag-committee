@@ -564,27 +564,44 @@ context metrics over the 9 local queries:
 
 | metric | mean | reads as |
 |---|---|---|
-| context precision (vs gold chunks) | 0.62 | of the top-5, how many are a gold chunk |
-| context recall (vs gold chunks) | 0.36 | of the gold chunks, how many surfaced — strict: gold is the *specific* answer passage |
+| context precision (vs gold chunks) | 0.81 | of the top-5, how many are a gold chunk |
+| context recall (vs gold chunks) | 0.43 | of the gold chunks, how many surfaced — strict: gold is the *specific* answer passage |
 | corpus precision (right paper) | 0.96 | routing to the correct paper is near-perfect even where the exact passage is missed |
+
+Moved from an earlier 0.62 / 0.36 baseline by widening the pre-rerank
+candidate pool (20 → 40) and the chunk overlap (50 → 100 tokens): the gap
+traced to the recursive chunker splitting a short technical span (a
+definition table, a stale-index explanation) across a chunk boundary, so
+neither half reranked well alone.
 
 **Full pipeline** (Step 10: router → sources → merge → judge/reformulate),
 RAGAS faithfulness + LLM context relevance, by category:
 
 | category | n | faithfulness | context_relevance | mean retries | judge-sufficient |
 |---|---|---|---|---|---|
-| local | 9 | 1.00 | 0.78 | 0.7 | 0.89 |
-| web | 3 | 0.78 | 0.92 | 1.3 | 0.33 |
-| vague | 3 | 1.00 | 0.46 | 2.0 | 0.67 |
+| local | 9 | 0.98 | 0.73 | 0.7 | 1.00 |
+| web | 3 | 0.78 | 0.47 | 0.3 | 0.67 |
+| vague | 3 | 1.00 | 0.67 | 1.3 | 0.00 |
 
-Headline: **faithfulness does not distinguish a bad run** — it stays ~1.0
-for `vague` because the answer step faithfully summarises whatever came
-back, even when that evidence is off-topic (one `vague` run answered
-"how do you make it better?" entirely about *cookie consent banners*).
-What flags it is `context_relevance` (vague 0.46 vs local 0.78; worst
-single query 0.20), the judge burning its full retry budget (`retries`
-2.0), and never reaching `sufficient`. That's the case for tightening the
-reformulation prompt in a later pass.
+Headline: **faithfulness still doesn't distinguish a bad run** — it stays
+~1.0 across categories because the answer step faithfully summarises
+whatever evidence came back, on-topic or not. What flags a weak run is
+`context_relevance` together with retry/judge-sufficient behavior. The
+reformulate step now grounds a retry query in the committee's actual
+research domain (RAG / Self-RAG / CRAG / REALM / DPR) instead of
+inventing a plausible-but-unrelated one — an earlier revision of this
+README documented a `vague` run drifting to answer entirely about
+*cookie consent banners*; that no longer happens. For a sub-query with no
+groundable topic at all (no salient noun, a pronoun with no antecedent),
+it now stops after a single retry as `unreformulable` instead of burning
+the full retry budget on a tangent — which is why `vague`'s
+`judge-sufficient` dropped to 0.00: the pipeline honestly reports it
+never resolved the query, instead of quietly settling on off-topic
+evidence it happened to score well. `context_relevance` still separates
+the categories (vague 0.67 vs local 0.73; worst single vague query 0.42,
+which *did* get a real reformulate-and-retry cycle rather than exiting
+early, since "improve the retriever part" has a groundable noun the
+judge could work with).
 
 ## Current limitations / known TODOs
 
